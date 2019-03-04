@@ -1,7 +1,7 @@
 #!/bin/bash
 
 date
-find . -type f \( -name "*.[ch]" -o -name "*.cpp" \) -print > cscope.files
+find . \( -path './src/test' -or -path './qa' \) -and -prune -or -type f \( -name "*.[ch]" -or -name "*.cc" -or -name "*.cpp" \)  -print > cscope.files
 cscope -b
 
 
