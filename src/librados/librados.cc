@@ -605,7 +605,7 @@ void librados::ObjectReadOperation::cache_evict()
   o->cache_evict();
 }
 
-void librados::ObjectWriteOperation::set_redirect(const std::string& tgt_obj, 
+void librados::ObjectWriteOperation::set_redirect(const std::string& tgt_obj,
 						  const IoCtx& tgt_ioctx,
 						  uint64_t tgt_version,
 						  int flag)
@@ -623,7 +623,7 @@ void librados::ObjectWriteOperation::set_chunk(uint64_t src_offset,
 					       int flag)
 {
   ::ObjectOperation *o = &impl->o;
-  o->set_chunk(src_offset, src_length, 
+  o->set_chunk(src_offset, src_length,
 	       tgt_ioctx.io_ctx_impl->oloc, object_t(tgt_oid), tgt_offset, flag);
 }
 
@@ -885,7 +885,7 @@ librados::NObjectIterator& librados::NObjectIterator::operator=(const librados::
   return *this;
 }
 
-bool librados::NObjectIterator::operator==(const librados::NObjectIterator& rhs) const 
+bool librados::NObjectIterator::operator==(const librados::NObjectIterator& rhs) const
 {
   if (impl && rhs.impl) {
     return *impl == *(rhs.impl);
@@ -1248,7 +1248,7 @@ int librados::IoCtx::remove(const std::string& oid)
 int librados::IoCtx::remove(const std::string& oid, int flags)
 {
   object_t obj(oid);
-  return io_ctx_impl->remove(obj, flags); 
+  return io_ctx_impl->remove(obj, flags);
 }
 
 int librados::IoCtx::trunc(const std::string& oid, uint64_t size)
@@ -1597,7 +1597,7 @@ int librados::IoCtx::aio_operate(const std::string& oid, AioCompletion *c,
 
 // deprecated
 int librados::IoCtx::aio_operate(const std::string& oid, AioCompletion *c,
-				 librados::ObjectReadOperation *o, 
+				 librados::ObjectReadOperation *o,
 				 snap_t snapid_unused_deprecated,
 				 int flags, bufferlist *pbl)
 {
@@ -2270,6 +2270,10 @@ void librados::IoCtx::unset_osdmap_full_try()
   io_ctx_impl->objecter->unset_osdmap_full_try();
 }
 
+
+
+// zhou:
+
 ///////////////////////////// Rados //////////////////////////////
 void librados::Rados::version(int *major, int *minor, int *extra)
 {
@@ -2355,6 +2359,7 @@ int librados::Rados::get_min_compatible_client(int8_t* min_compat_client,
                                            require_min_compat_client);
 }
 
+// zhou: read conf file
 int librados::Rados::conf_read_file(const char * const path) const
 {
   return rados_conf_read_file((rados_t)client, path);
@@ -2409,6 +2414,7 @@ int librados::Rados::service_daemon_update_status(
   return client->service_daemon_update_status(std::move(status));
 }
 
+// zhou: create pool.
 int librados::Rados::pool_create(const char *name)
 {
   string str(name);
@@ -2825,6 +2831,7 @@ static CephContext *rados_create_cct(const char * const clustername,
   return cct;
 }
 
+// zhou:
 extern "C" int rados_create(rados_t *pcluster, const char * const id)
 {
   CephInitParameters iparams(CEPH_ENTITY_TYPE_CLIENT);
@@ -2834,7 +2841,9 @@ extern "C" int rados_create(rados_t *pcluster, const char * const id)
   CephContext *cct = rados_create_cct("", &iparams);
 
   tracepoint(librados, rados_create_enter, id);
+
   *pcluster = reinterpret_cast<rados_t>(new librados::RadosClient(cct));
+
   tracepoint(librados, rados_create_exit, 0, *pcluster);
 
   cct->put();
@@ -3981,9 +3990,9 @@ extern "C" int rados_ioctx_pool_requires_alignment2(rados_ioctx_t io,
   tracepoint(librados, rados_ioctx_pool_requires_alignment_enter2, io);
   librados::IoCtxImpl *ctx = (librados::IoCtxImpl *)io;
   bool requires_alignment;
-  int retval = ctx->client->pool_requires_alignment2(ctx->get_id(), 
+  int retval = ctx->client->pool_requires_alignment2(ctx->get_id(),
   	&requires_alignment);
-  tracepoint(librados, rados_ioctx_pool_requires_alignment_exit2, retval, 
+  tracepoint(librados, rados_ioctx_pool_requires_alignment_exit2, retval,
   	requires_alignment);
   if (requires)
     *requires = requires_alignment;
@@ -4006,7 +4015,7 @@ extern "C" int rados_ioctx_pool_required_alignment2(rados_ioctx_t io,
   librados::IoCtxImpl *ctx = (librados::IoCtxImpl *)io;
   int retval = ctx->client->pool_required_alignment2(ctx->get_id(),
   	alignment);
-  tracepoint(librados, rados_ioctx_pool_required_alignment_exit2, retval, 
+  tracepoint(librados, rados_ioctx_pool_required_alignment_exit2, retval,
   	*alignment);
   return retval;
 }
@@ -6711,5 +6720,3 @@ int librados::IoCtx::application_metadata_list(const std::string& app_name,
 {
   return io_ctx_impl->application_metadata_list(app_name, values);
 }
-
-

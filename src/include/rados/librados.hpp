@@ -1295,6 +1295,9 @@ namespace librados
 
   CEPH_RADOS_API std::ostream& operator<<(std::ostream&, const PlacementGroup&);
 
+
+
+    // zhou: README, class Rados
   class CEPH_RADOS_API Rados
   {
   public:
@@ -1441,7 +1444,7 @@ namespace librados
     static AioCompletion *aio_create_completion();
     static AioCompletion *aio_create_completion(void *cb_arg, callback_t cb_complete,
 						callback_t cb_safe);
-    
+
     friend std::ostream& operator<<(std::ostream &oss, const Rados& r);
   private:
     // We don't allow assignment or copying
@@ -1450,6 +1453,6 @@ namespace librados
     RadosClient *client;
   };
 }
+// zhou: end of "namespace librados"
 
 #endif
-

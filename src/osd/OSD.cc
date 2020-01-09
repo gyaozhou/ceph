@@ -1671,11 +1671,11 @@ void OSDService::_queue_for_recovery(
 #define dout_prefix *_dout
 
 // Commands shared between OSD's console and admin console:
-namespace ceph { 
-namespace osd_cmds { 
+namespace ceph {
+namespace osd_cmds {
 
 int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f, std::ostream& os);
- 
+
 }} // namespace ceph::osd_cmds
 
 int OSD::mkfs(CephContext *cct, ObjectStore *store, const string &dev,
@@ -2229,7 +2229,7 @@ will start to track new ops received afterwards.";
     store->compact();
     auto end = ceph::coarse_mono_clock::now();
     double duration = std::chrono::duration<double>(end-start).count();
-    dout(1) << "finished manual compaction in " 
+    dout(1) << "finished manual compaction in "
             << duration
             << " seconds" << dendl;
     f->open_object_section("compact_result");
@@ -3083,7 +3083,7 @@ void OSD::create_logger()
   osd_plb.add_u64(
     l_osd_cached_crc_adjusted, "cached_crc_adjusted",
     "Total number getting crc from crc_cache with adjusting");
-  osd_plb.add_u64(l_osd_missed_crc, "missed_crc", 
+  osd_plb.add_u64(l_osd_missed_crc, "missed_crc",
     "Total number of crc cache misses");
 
   osd_plb.add_u64(l_osd_pg, "numpg", "Placement groups",
@@ -5518,7 +5518,7 @@ void OSD::got_full_map(epoch_t e)
     requested_full_first = requested_full_last = 0;
     return;
   }
-  
+
   requested_full_first = e + 1;
 
   dout(10) << __func__ << " " << e << ", requested " << requested_full_first
@@ -6243,7 +6243,7 @@ void OSD::probe_smart(const string& only_devid, ostream& ss)
 
 int OSD::probe_smart_device(const char *device, int timeout, std::string *result)
 {
-  // when using --json, smartctl will report its errors in JSON format to stdout 
+  // when using --json, smartctl will report its errors in JSON format to stdout
   SubProcessTimed smartctl(
     "sudo", SubProcess::CLOSE, SubProcess::PIPE, SubProcess::CLOSE,
     timeout);
@@ -6394,6 +6394,7 @@ void OSD::dispatch_session_waiting(SessionRef session, OSDMapRef osdmap)
   }
 }
 
+// zhou: README,
 void OSD::ms_fast_dispatch(Message *m)
 {
   FUNCTRACE(cct);
@@ -6446,6 +6447,7 @@ void OSD::ms_fast_dispatch(Message *m)
     }
   }
 
+  // zhou: create "op" which refer to READ/WRITE
   OpRequestRef op = op_tracker.create_request<OpRequest, Message*>(m);
   {
 #ifdef WITH_LTTNG
@@ -6473,20 +6475,25 @@ void OSD::ms_fast_dispatch(Message *m)
       op,
       static_cast<MOSDFastDispatchOp*>(m)->get_map_epoch());
   } else {
+
     // legacy client, and this is an MOSDOp (the *only* fast dispatch
     // message that didn't have an explicit spg_t); we need to map
     // them to an spg_t while preserving delivery order.
     auto priv = m->get_connection()->get_priv();
+
+    // zhou: client session
     if (auto session = static_cast<Session*>(priv.get()); session) {
+
       Mutex::Locker l{session->session_dispatch_lock};
       op->get();
       session->waiting_on_map.push_back(*op);
+
       OSDMapRef nextmap = service.get_nextmap_reserved();
       dispatch_session_waiting(session, nextmap);
       service.release_map(nextmap);
     }
   }
-  OID_EVENT_TRACE_WITH_MSG(m, "MS_FAST_DISPATCH_END", false); 
+  OID_EVENT_TRACE_WITH_MSG(m, "MS_FAST_DISPATCH_END", false);
 }
 
 void OSD::ms_fast_preprocess(Message *m)
@@ -7125,7 +7132,7 @@ void OSD::handle_osd_map(MOSDMap *m)
   // the OSDMaps will be pinned in the cache and we won't try to read it
   // off of disk. Otherwise these maps will probably not stay in the cache,
   // and reading those OSDMaps before they are actually written can result
-  // in a crash. 
+  // in a crash.
   map<epoch_t,OSDMapRef> added_maps;
   map<epoch_t,bufferlist> added_maps_bl;
   if (m->fsid != monc->get_fsid()) {
@@ -7570,7 +7577,7 @@ void OSD::_committed_osd_maps(epoch_t first, epoch_t last, MOSDMap *m)
 	set<int> avoid_ports;
 #if defined(__FreeBSD__)
         // prevent FreeBSD from grabbing the client_messenger port during
-        // rebinding. In which case a cluster_meesneger will connect also 
+        // rebinding. In which case a cluster_meesneger will connect also
 	// to the same port
 	client_messenger->get_myaddrs().get_ports(&avoid_ports);
 #endif
@@ -7598,7 +7605,7 @@ void OSD::_committed_osd_maps(epoch_t first, epoch_t last, MOSDMap *m)
 	if (r != 0) {
 	  do_shutdown = true;  // FIXME: do_restart?
           network_error = true;
-          dout(0) << __func__ << " marked down:" 
+          dout(0) << __func__ << " marked down:"
                   << " rebind hb_front_server_messenger failed" << dendl;
         }
 
@@ -8707,7 +8714,7 @@ void OSD::do_recovery(
 #endif
 
     bool do_unfound = pg->start_recovery_ops(reserved_pushes, handle, &started);
-    dout(10) << "do_recovery started " << started << "/" << reserved_pushes 
+    dout(10) << "do_recovery started " << started << "/" << reserved_pushes
 	     << " on " << *pg << dendl;
 
     if (do_unfound) {
@@ -8789,6 +8796,7 @@ bool OSD::op_is_discardable(const MOSDOp *op)
   return false;
 }
 
+// zhou: README,
 void OSD::enqueue_op(spg_t pg, OpRequestRef& op, epoch_t epoch)
 {
   utime_t latency = ceph_clock_now() - op->get_req()->get_recv_stamp();
@@ -8802,6 +8810,9 @@ void OSD::enqueue_op(spg_t pg, OpRequestRef& op, epoch_t epoch)
   op->osd_trace.keyval("cost", op->get_req()->get_cost());
   op->mark_queued_for_pg();
   logger->tinc(l_osd_op_before_queue_op_lat, latency);
+
+  // zhou: not Erease Code mode, OSC internal Work Queue, composited with
+  //       several list.
   op_shardedwq.queue(
     OpQueueItem(
       unique_ptr<OpQueueItem::OpQueueable>(new PGOpItem(pg, op)),
@@ -8870,6 +8881,7 @@ void OSD::dequeue_op(
   op->mark_reached_pg();
   op->osd_trace.event("dequeue_op");
 
+  // zhou: README,
   pg->do_request(op, handle);
 
   // finish
@@ -9936,8 +9948,8 @@ void OSD::ShardedOpWQ::_enqueue_front(OpQueueItem&& item)
   sdata->sdata_wait_lock.Unlock();
 }
 
-namespace ceph { 
-namespace osd_cmds { 
+namespace ceph {
+namespace osd_cmds {
 
 int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f,
 	 std::ostream& os)
@@ -9946,21 +9958,21 @@ int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f,
         os << "could not issue heap profiler command -- not using tcmalloc!";
         return -EOPNOTSUPP;
   }
-  
+
   string cmd;
   if (!cmd_getval(&cct, cmdmap, "heapcmd", cmd)) {
         os << "unable to get value for command \"" << cmd << "\"";
        return -EINVAL;
    }
-  
+
   std::vector<std::string> cmd_vec;
   get_str_vec(cmd, cmd_vec);
-  
+
   ceph_heap_profiler_handle_command(cmd_vec, os);
-  
+
   return 0;
 }
- 
+
 }} // namespace ceph::osd_cmds
 
 

@@ -244,6 +244,7 @@ int librados::RadosClient::ping_monitor(const string mon_id, string *result)
   return err;
 }
 
+// zhou:
 int librados::RadosClient::connect()
 {
   int err;
@@ -253,6 +254,7 @@ int librados::RadosClient::connect()
     return -EINPROGRESS;
   if (state == CONNECTED)
     return -EISCONN;
+
   state = CONNECTING;
 
   {
@@ -703,7 +705,7 @@ bool librados::RadosClient::put() {
   refcnt--;
   return (refcnt == 0);
 }
- 
+
 int librados::RadosClient::pool_create(string& name, unsigned long long auid,
 				       int16_t crush_rule)
 {

@@ -61,6 +61,7 @@ class PerfCounters;
 
 // -----------------------------------------
 
+// zhou: operations of OSD Client
 struct ObjectOperation {
   vector<OSDOp> ops;
   int flags;
@@ -1133,7 +1134,7 @@ struct ObjectOperation {
   /*
    * Extensible tier
    */
-  void set_redirect(object_t tgt, snapid_t snapid, object_locator_t tgt_oloc, 
+  void set_redirect(object_t tgt, snapid_t snapid, object_locator_t tgt_oloc,
 		    version_t tgt_version, int flag) {
     OSDOp& osd_op = add_op(CEPH_OSD_OP_SET_REDIRECT);
     osd_op.op.copy_from.snapid = snapid;
@@ -1201,7 +1202,7 @@ struct ObjectOperation {
 
 // ----------------
 
-
+// zhou:
 class Objecter : public md_config_obs_t, public Dispatcher {
 public:
   // config observer bits
@@ -2903,7 +2904,7 @@ public:
     const hobject_t &end,
     const uint32_t max,
     const bufferlist &filter_bl,
-    std::list<librados::ListObjectImpl> *result, 
+    std::list<librados::ListObjectImpl> *result,
     hobject_t *next,
     Context *on_finish);
 
@@ -2914,7 +2915,7 @@ public:
       const int64_t pool_id,
       int budget,
       epoch_t reply_epoch,
-      std::list<librados::ListObjectImpl> *result, 
+      std::list<librados::ListObjectImpl> *result,
       hobject_t *next,
       Context *on_finish);
   friend class C_EnumerateReply;

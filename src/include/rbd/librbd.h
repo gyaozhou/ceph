@@ -48,6 +48,8 @@ extern "C" {
 #define LIBRBD_SUPPORTS_WATCH 0
 #define LIBRBD_SUPPORTS_WRITESAME 1
 
+// zhou: expose symbols defined in dynamic library. Without it, can not be visibile
+//       for user.
 #if __GNUC__ >= 4
   #define CEPH_RBD_API    __attribute__ ((visibility ("default")))
 #else
@@ -536,7 +538,7 @@ CEPH_RBD_API int rbd_snap_get_limit(rbd_image_t image, uint64_t *limit);
 CEPH_RBD_API int rbd_snap_set_limit(rbd_image_t image, uint64_t limit);
 
 /**
- * Get the timestamp of a snapshot for an image. 
+ * Get the timestamp of a snapshot for an image.
  *
  * @param snap_id the snap id of a snapshot of input image.
  * @param timestamp the timestamp of input snapshot.

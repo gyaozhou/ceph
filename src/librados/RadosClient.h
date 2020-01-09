@@ -36,6 +36,7 @@ class MLog;
 class Messenger;
 class AioCompletionImpl;
 
+// zhou:
 class librados::RadosClient : public Dispatcher
 {
   std::unique_ptr<CephContext,
@@ -51,6 +52,8 @@ private:
     CONNECTED,
   } state;
 
+
+  // zhou: README,
   MonClient monclient;
   MgrClient mgrclient;
   Messenger *messenger;

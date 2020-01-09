@@ -800,6 +800,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     return r;
   }
 
+  // zhou: used a lot
   int create(IoCtx& io_ctx, const char *imgname, uint64_t size,
 	     bool old_format, uint64_t features, int *order,
 	     uint64_t stripe_unit, uint64_t stripe_count)
@@ -832,6 +833,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     return r;
   }
 
+  // zhou:
   int create(IoCtx& io_ctx, const std::string &image_name,
 	     const std::string &image_id, uint64_t size,
 	     ImageOptions& opts,
@@ -882,13 +884,16 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     }
 
     if (old_format) {
+      // zhou: deprecated
       if ( !getenv("RBD_FORCE_ALLOW_V1") ) {
         lderr(cct) << "Format 1 image creation unsupported. " << dendl;
         return -EINVAL;
       }
       lderr(cct) << "Forced V1 image creation. " << dendl;
       r = create_v1(io_ctx, image_name.c_str(), size, order);
+
     } else {
+
       ThreadPool *thread_pool;
       ContextWQ *op_work_queue;
       ImageCtx::get_thread_pool_instance(cct, &thread_pool, &op_work_queue);
@@ -1952,7 +1957,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
       if (throttle.pending_error()) {
         return throttle.wait_for_ret();
       }
-      
+
       {
         RWLock::RLocker snap_locker(src->snap_lock);
         if (src->object_map != nullptr) {
@@ -1970,7 +1975,7 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
         } else {
           object_id += src->stripe_count;
         }
-      }      
+      }
 
       uint64_t len = min(period, src_size - offset);
       bufferlist *bl = new bufferlist();
@@ -2430,4 +2435,3 @@ std::ostream &operator<<(std::ostream &os, const librbd::ImageOptions &opts) {
 
   return os;
 }
-

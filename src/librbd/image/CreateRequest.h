@@ -30,6 +30,7 @@ namespace image {
 template <typename ImageCtxT = ImageCtx>
 class CreateRequest {
 public:
+  // zhou:
   static CreateRequest *create(IoCtx &ioctx, const std::string &image_name,
                                const std::string &image_id, uint64_t size,
                                const ImageOptions &image_options,
@@ -37,6 +38,7 @@ public:
                                const std::string &primary_mirror_uuid,
                                bool skip_mirror_enable,
                                ContextWQ *op_work_queue, Context *on_finish) {
+
     return new CreateRequest(ioctx, image_name, image_id, size, image_options,
                              non_primary_global_image_id, primary_mirror_uuid,
                              skip_mirror_enable, op_work_queue,

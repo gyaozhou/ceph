@@ -13,7 +13,7 @@
   * etc., because we don't send writes down to disk until after
   * replicas ack.
   */
-
+// zhou: used in memory
 struct SnapSetContext {
   hobject_t oid;
   SnapSet snapset;
@@ -27,6 +27,7 @@ struct SnapSetContext {
 
 struct ObjectContext;
 
+// zhou: used in memeory.
 struct ObjectState {
   object_info_t oi;
   bool exists;         ///< the stored object exists (i.e., we will remember the object_info_t)
