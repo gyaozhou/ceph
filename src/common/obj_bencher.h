@@ -68,18 +68,18 @@ class ObjBencher {
 public:
   CephContext *cct;
 protected:
-  Mutex lock;
+  ceph::mutex lock = ceph::make_mutex("ObjBencher::lock");
 
   static void *status_printer(void *bencher);
 
   struct bench_data data;
 
   int fetch_bench_metadata(const std::string& metadata_file, uint64_t* op_size,
-			   uint64_t* object_size, int* num_objects, int* prevPid);
+			   uint64_t* object_size, int* num_ops, int* num_objects, int* prev_pid);
 
-  int write_bench(int secondsToRun, int concurrentios, const string& run_name_meta, unsigned max_objects);
-  int seq_read_bench(int secondsToRun, int num_objects, int concurrentios, int writePid, bool no_verify=false);
-  int rand_read_bench(int secondsToRun, int num_objects, int concurrentios, int writePid, bool no_verify=false);
+  int write_bench(int secondsToRun, int concurrentios, const string& run_name_meta, unsigned max_objects, int prev_pid);
+  int seq_read_bench(int secondsToRun, int num_ops, int num_objects, int concurrentios, int writePid, bool no_verify=false);
+  int rand_read_bench(int secondsToRun, int num_ops, int num_objects, int concurrentios, int writePid, bool no_verify=false);
 
   int clean_up(int num_objects, int prevPid, int concurrentios);
   bool more_objects_matching_prefix(const std::string& prefix, std::list<Object>* name);
@@ -107,12 +107,12 @@ protected:
   ostream& out(ostream& os);
   ostream& out(ostream& os, utime_t& t);
 public:
-  explicit ObjBencher(CephContext *cct_) : show_time(false), cct(cct_), lock("ObjBencher::lock") {}
+  explicit ObjBencher(CephContext *cct_) : show_time(false), cct(cct_), data() {}
   virtual ~ObjBencher() {}
   int aio_bench(
     int operation, int secondsToRun,
     int concurrentios, uint64_t op_size, uint64_t object_size, unsigned max_objects,
-    bool cleanup, bool hints, const std::string& run_name, bool no_verify=false);
+    bool cleanup, bool hints, const std::string& run_name, bool reuse_bench, bool no_verify=false);
   int clean_up(const std::string& prefix, int concurrentios, const std::string& run_name);
 
   void set_show_time(bool dt) {

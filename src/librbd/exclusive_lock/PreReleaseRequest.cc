@@ -94,7 +94,7 @@ void PreReleaseRequest<I>::handle_cancel_op_requests(int r) {
   CephContext *cct = m_image_ctx.cct;
   ldout(cct, 10) << "r=" << r << dendl;
 
-  assert(r == 0);
+  ceph_assert(r == 0);
 
   send_block_writes();
 }
@@ -109,7 +109,7 @@ void PreReleaseRequest<I>::send_block_writes() {
     klass, &klass::handle_block_writes>(this);
 
   {
-    RWLock::RLocker owner_locker(m_image_ctx.owner_lock);
+    std::shared_lock owner_locker{m_image_ctx.owner_lock};
     // setting the lock as required will automatically cause the IO
     // queue to re-request the lock if any IO is queued
     if (m_image_ctx.clone_copy_on_read ||
@@ -165,7 +165,7 @@ void PreReleaseRequest<I>::send_invalidate_cache() {
   CephContext *cct = m_image_ctx.cct;
   ldout(cct, 10) << dendl;
 
-  RWLock::RLocker owner_lock(m_image_ctx.owner_lock);
+  std::shared_lock owner_lock{m_image_ctx.owner_lock};
   Context *ctx = create_context_callback<
       PreReleaseRequest<I>,
       &PreReleaseRequest<I>::handle_invalidate_cache>(this);
@@ -205,14 +205,14 @@ void PreReleaseRequest<I>::handle_flush_notifies(int r) {
   CephContext *cct = m_image_ctx.cct;
   ldout(cct, 10) << dendl;
 
-  assert(r == 0);
+  ceph_assert(r == 0);
   send_close_journal();
 }
 
 template <typename I>
 void PreReleaseRequest<I>::send_close_journal() {
   {
-    RWLock::WLocker snap_locker(m_image_ctx.snap_lock);
+    std::unique_lock image_locker{m_image_ctx.image_lock};
     std::swap(m_journal, m_image_ctx.journal);
   }
 
@@ -240,7 +240,8 @@ void PreReleaseRequest<I>::handle_close_journal(int r) {
     lderr(cct) << "failed to close journal: " << cpp_strerror(r) << dendl;
   }
 
-  delete m_journal;
+  m_journal->put();
+  m_journal = nullptr;
 
   send_close_object_map();
 }
@@ -248,7 +249,7 @@ void PreReleaseRequest<I>::handle_close_journal(int r) {
 template <typename I>
 void PreReleaseRequest<I>::send_close_object_map() {
   {
-    RWLock::WLocker snap_locker(m_image_ctx.snap_lock);
+    std::unique_lock image_locker{m_image_ctx.image_lock};
     std::swap(m_object_map, m_image_ctx.object_map);
   }
 
@@ -262,7 +263,7 @@ void PreReleaseRequest<I>::send_close_object_map() {
 
   using klass = PreReleaseRequest<I>;
   Context *ctx = create_context_callback<
-    klass, &klass::handle_close_object_map>(this);
+    klass, &klass::handle_close_object_map>(this, m_object_map);
   m_object_map->close(ctx);
 }
 
@@ -271,9 +272,10 @@ void PreReleaseRequest<I>::handle_close_object_map(int r) {
   CephContext *cct = m_image_ctx.cct;
   ldout(cct, 10) << "r=" << r << dendl;
 
-  // object map shouldn't return errors
-  assert(r == 0);
-  delete m_object_map;
+  if (r < 0) {
+    lderr(cct) << "failed to close object map: " << cpp_strerror(r) << dendl;
+  }
+  m_object_map->put();
 
   send_unlock();
 }

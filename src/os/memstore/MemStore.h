@@ -25,22 +25,19 @@
 #include "common/RWLock.h"
 #include "os/ObjectStore.h"
 #include "PageSet.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 class MemStore : public ObjectStore {
 public:
   struct Object : public RefCountedObject {
-    std::mutex xattr_mutex;
-    std::mutex omap_mutex;
+    ceph::mutex xattr_mutex{ceph::make_mutex("MemStore::Object::xattr_mutex")};
+    ceph::mutex omap_mutex{ceph::make_mutex("MemStore::Object::omap_mutex")};
     map<string,bufferptr> xattr;
     bufferlist omap_header;
     map<string,bufferlist> omap;
 
-    typedef boost::intrusive_ptr<Object> Ref;
-    friend void intrusive_ptr_add_ref(Object *o) { o->get(); }
-    friend void intrusive_ptr_release(Object *o) { o->put(); }
+    using Ref = ceph::ref_t<Object>;
 
-    Object() : RefCountedObject(nullptr, 0) {}
     // interface for object data
     virtual size_t get_size() const = 0;
     virtual int read(uint64_t offset, uint64_t len, bufferlist &bl) = 0;
@@ -90,8 +87,10 @@ public:
       }
       f->close_section();
     }
+  protected:
+    Object() = default;
   };
-  typedef Object::Ref ObjectRef;
+  using ObjectRef = Object::Ref;
 
   struct PageSetObject;
   struct Collection : public CollectionImpl {
@@ -101,13 +100,15 @@ public:
     ceph::unordered_map<ghobject_t, ObjectRef> object_hash;  ///< for lookup
     map<ghobject_t, ObjectRef> object_map;        ///< for iteration
     map<string,bufferptr> xattr;
-    RWLock lock;   ///< for object_{map,hash}
-    bool exists;
-    std::mutex sequencer_mutex;
+    /// for object_{map,hash}
+    ceph::shared_mutex lock{
+      ceph::make_shared_mutex("MemStore::Collection::lock", true, false)};
+
+    bool exists = true;
+    ceph::mutex sequencer_mutex{
+      ceph::make_mutex("MemStore::Collection::sequencer_mutex")};
 
     typedef boost::intrusive_ptr<Collection> Ref;
-    friend void intrusive_ptr_add_ref(Collection *c) { c->get(); }
-    friend void intrusive_ptr_release(Collection *c) { c->put(); }
 
     ObjectRef create_object() const;
 
@@ -117,7 +118,7 @@ public:
     // level.
 
     ObjectRef get_object(ghobject_t oid) {
-      RWLock::RLocker l(lock);
+      std::shared_lock l{lock};
       auto o = object_hash.find(oid);
       if (o == object_hash.end())
 	return ObjectRef();
@@ -125,7 +126,7 @@ public:
     }
 
     ObjectRef get_or_create_object(ghobject_t oid) {
-      RWLock::WLocker l(lock);
+      std::lock_guard l{lock};
       auto result = object_hash.emplace(oid, ObjectRef());
       if (result.second)
         object_map[oid] = result.first->second = create_object();
@@ -180,12 +181,12 @@ public:
       return true;
     }
 
+  private:
+    FRIEND_MAKE_REF(Collection);
     explicit Collection(CephContext *cct, coll_t c)
-      : CollectionImpl(c),
+      : CollectionImpl(cct, c),
 	cct(cct),
-	use_page_set(cct->_conf->memstore_page_set),
-        lock("MemStore::Collection::lock", true, false),
-	exists(true) {}
+	use_page_set(cct->_conf->memstore_page_set) {}
   };
   typedef Collection::Ref CollectionRef;
 
@@ -194,7 +195,9 @@ private:
 
 
   ceph::unordered_map<coll_t, CollectionRef> coll_map;
-  RWLock coll_lock;    ///< rwlock to protect coll_map
+  /// rwlock to protect coll_map
+  ceph::shared_mutex coll_lock{
+    ceph::make_shared_mutex("MemStore::coll_lock")};
   map<coll_t,CollectionRef> new_coll_map;
 
   CollectionRef get_collection(const coll_t& cid);
@@ -233,6 +236,7 @@ private:
   int _collection_move_rename(const coll_t& oldcid, const ghobject_t& oldoid,
 			      coll_t cid, const ghobject_t& o);
   int _split_collection(const coll_t& cid, uint32_t bits, uint32_t rem, coll_t dest);
+  int _merge_collection(const coll_t& cid, uint32_t bits, coll_t dest);
 
   int _save();
   int _load();
@@ -243,7 +247,6 @@ private:
 public:
   MemStore(CephContext *cct, const string& path)
     : ObjectStore(cct, path),
-      coll_lock("MemStore::coll_lock"),
       finisher(cct),
       used_bytes(0) {}
   ~MemStore() override { }
@@ -289,7 +292,10 @@ public:
     return 0;
   }
 
-  int statfs(struct store_statfs_t *buf) override;
+  int statfs(struct store_statfs_t *buf,
+             osd_alert_list_t* alerts = nullptr) override;
+  int pool_statfs(uint64_t pool_id, struct store_statfs_t *buf,
+		  bool *per_pool_omap) override;
 
   bool exists(CollectionHandle &c, const ghobject_t& oid) override;
   int stat(CollectionHandle &c, const ghobject_t& oid,
@@ -320,6 +326,11 @@ public:
     return get_collection(c);
   }
   CollectionHandle create_new_collection(const coll_t& c) override;
+
+  void set_collection_commit_queue(const coll_t& cid,
+				   ContextQueue *commit_queue) override {
+  }
+
   bool collection_exists(const coll_t& c) override;
   int collection_empty(CollectionHandle& c, bool *empty) override;
   int collection_bits(CollectionHandle& c) override;

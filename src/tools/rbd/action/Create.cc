@@ -4,11 +4,12 @@
 #include "tools/rbd/ArgumentTypes.h"
 #include "tools/rbd/Shell.h"
 #include "tools/rbd/Utils.h"
+#include "common/ceph_mutex.h"
+#include "common/config_proxy.h"
 #include "common/errno.h"
+#include "global/global_context.h"
 #include <iostream>
 #include <boost/program_options.hpp>
-#include "common/Cond.h"
-#include "common/Mutex.h"
 
 namespace rbd {
 namespace action {
@@ -37,8 +38,8 @@ void thick_provision_writer_completion(rbd_completion_t, void *);
 
 struct thick_provision_writer {
   librbd::Image *image;
-  Mutex lock;
-  Cond cond;
+  ceph::mutex lock = ceph::make_mutex("thick_provision_writer::lock");
+  ceph::condition_variable cond;
   bufferlist bl;
   uint64_t chunk_size;
   const int block_size;
@@ -51,20 +52,19 @@ struct thick_provision_writer {
   // Constructor
   explicit thick_provision_writer(librbd::Image *i, librbd::ImageOptions &o)
     : image(i),
-      lock("thick_provision_writer::lock"),
       block_size(512) // 512 Bytes
   {
     // If error cases occur, the code is aborted, because
     // constructor cannot return error value.
-    assert(g_conf != nullptr);
+    ceph_assert(g_ceph_context != nullptr);
     bl.append_zero(block_size);
 
     librbd::image_info_t info;
     int r = image->stat(info, sizeof(info));
-    assert(r >= 0);
+    ceph_assert(r >= 0);
     uint64_t order;
     if (info.order == 0) {
-      order = g_conf->get_val<int64_t>("rbd_default_order");
+      order = g_conf().get_val<uint64_t>("rbd_default_order");
     } else {
       order = info.order;
     }
@@ -73,7 +73,7 @@ struct thick_provision_writer {
       chunk_size = image->get_stripe_unit();
     }
 
-    concurr = g_conf->get_val<int64_t>("rbd_concurrent_management_ops");
+    concurr = g_conf().get_val<uint64_t>("rbd_concurrent_management_ops");
     io_status.in_flight = 0;
     io_status.io_error = 0;
   }
@@ -81,7 +81,7 @@ struct thick_provision_writer {
   int start_io(uint64_t write_offset)
   {
     {
-      Mutex::Locker l(lock);
+      std::lock_guard l{lock};
       io_status.in_flight++;
       if (io_status.in_flight > concurr) {
         io_status.in_flight--;
@@ -94,20 +94,18 @@ struct thick_provision_writer {
     int r;
     r = image->aio_writesame(write_offset, chunk_size, bl, c, LIBRADOS_OP_FLAG_FADVISE_SEQUENTIAL);
     if (r < 0) {
-      Mutex::Locker l(lock);
+      std::lock_guard l{lock};
       io_status.io_error = r;
     }
     return r;
   }
 
   int wait_for(uint64_t max) {
-    Mutex::Locker l(lock);
+    std::unique_lock l{lock};
     int r = io_status.io_error;
 
     while (io_status.in_flight > max) {
-      utime_t dur;
-      dur.set_from_double(.2);
-      cond.WaitInterval(lock, dur);
+      cond.wait_for(l, 200ms);
     }
     return r;
   }
@@ -118,13 +116,13 @@ void thick_provision_writer_completion(rbd_completion_t rc, void *pc) {
   thick_provision_writer *tc = static_cast<thick_provision_writer *>(pc);
 
   int r = ac->get_return_value();
-  tc->lock.Lock();
+  tc->lock.lock();
   if (r < 0 &&  tc->io_status.io_error >= 0) {
     tc->io_status.io_error = r;
   }
   tc->io_status.in_flight--;
-  tc->cond.Signal();
-  tc->lock.Unlock();
+  tc->cond.notify_all();
+  tc->lock.unlock();
   ac->release();
 }
 
@@ -151,6 +149,9 @@ int write_data(librbd::Image &image, librbd::ImageOptions &opts,
       }
       ++i;
       off += tpw.chunk_size;
+      if(off > image_size) {
+        off = image_size;
+      }
       pc.update_progress(off, image_size);
     }
   }
@@ -180,9 +181,9 @@ int thick_write(const std::string &image_name,librados::IoCtx &io_ctx,
 
   // To prevent writesame from discarding data, thick_write sets
   // the rbd_discard_on_zeroed_write_same option to false.
-  assert(g_conf != nullptr);
-  r = g_conf->set_val("rbd_discard_on_zeroed_write_same", "false");
-  assert(r == 0);
+  ceph_assert(g_ceph_context != nullptr);
+  r = g_conf().set_val("rbd_discard_on_zeroed_write_same", "false");
+  ceph_assert(r == 0);
   r = utils::open_image(io_ctx, image_name, false, &image);
   if (r < 0) {
     return r;
@@ -199,11 +200,13 @@ int execute(const po::variables_map &vm,
             const std::vector<std::string> &ceph_global_init_args) {
   size_t arg_index = 0;
   std::string pool_name;
+  std::string namespace_name;
   std::string image_name;
   std::string snap_name;
   int r = utils::get_pool_image_snapshot_names(
-    vm, at::ARGUMENT_MODIFIER_NONE, &arg_index, &pool_name, &image_name,
-    &snap_name, utils::SNAPSHOT_PRESENCE_NONE, utils::SPEC_VALIDATION_FULL);
+    vm, at::ARGUMENT_MODIFIER_NONE, &arg_index, &pool_name, &namespace_name,
+    &image_name, &snap_name, true, utils::SNAPSHOT_PRESENCE_NONE,
+    utils::SPEC_VALIDATION_FULL);
   if (r < 0) {
     return r;
   }
@@ -222,14 +225,19 @@ int execute(const po::variables_map &vm,
 
   librados::Rados rados;
   librados::IoCtx io_ctx;
-  r = utils::init(pool_name, &rados, &io_ctx);
+  r = utils::init(pool_name, namespace_name, &rados, &io_ctx);
   if (r < 0) {
     return r;
   }
 
   librbd::RBD rbd;
   r = do_create(rbd, io_ctx, image_name.c_str(), size, opts);
-  if (r < 0) {
+  if (!namespace_name.empty() && r == -ENOENT) {
+    std::cerr << "rbd: namespace not found - it must be created with "
+              << "'rbd namespace create' before creating an image."
+              << std::endl;
+    return r;
+  } else if (r < 0) {
     std::cerr << "rbd: create error: " << cpp_strerror(r) << std::endl;
     return r;
   }

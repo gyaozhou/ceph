@@ -2,7 +2,7 @@
 // vim: ts=8 sw=2 smarttab
 
 #include "librbd/watcher/RewatchRequest.h"
-#include "common/RWLock.h"
+#include "common/ceph_mutex.h"
 #include "common/errno.h"
 #include "librbd/Utils.h"
 
@@ -21,7 +21,7 @@ namespace watcher {
 using std::string;
 
 RewatchRequest::RewatchRequest(librados::IoCtx& ioctx, const string& oid,
-                               RWLock &watch_lock,
+                               ceph::shared_mutex &watch_lock,
                                librados::WatchCtx2 *watch_ctx,
                                uint64_t *watch_handle, Context *on_finish)
   : m_ioctx(ioctx), m_oid(oid), m_watch_lock(watch_lock),
@@ -34,8 +34,11 @@ void RewatchRequest::send() {
 }
 
 void RewatchRequest::unwatch() {
-  assert(m_watch_lock.is_wlocked());
-  assert(*m_watch_handle != 0);
+  ceph_assert(ceph_mutex_is_wlocked(m_watch_lock));
+  if (*m_watch_handle == 0) {
+    rewatch();
+    return;
+  }
 
   CephContext *cct = reinterpret_cast<CephContext *>(m_ioctx.cct());
   ldout(cct, 10) << dendl;
@@ -46,7 +49,7 @@ void RewatchRequest::unwatch() {
   librados::AioCompletion *aio_comp = create_rados_callback<
                         RewatchRequest, &RewatchRequest::handle_unwatch>(this);
   int r = m_ioctx.aio_unwatch(watch_handle, aio_comp);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -71,7 +74,7 @@ void RewatchRequest::rewatch() {
   librados::AioCompletion *aio_comp = create_rados_callback<
                         RewatchRequest, &RewatchRequest::handle_rewatch>(this);
   int r = m_ioctx.aio_watch(m_oid, aio_comp, &m_rewatch_handle, m_watch_ctx);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -81,16 +84,15 @@ void RewatchRequest::handle_rewatch(int r) {
   if (r < 0) {
     lderr(cct) << "failed to watch object: " << cpp_strerror(r)
                << dendl;
-    finish(r);
-    return;
+    m_rewatch_handle = 0;
   }
 
   {
-    RWLock::WLocker watch_locker(m_watch_lock);
+    std::unique_lock watch_locker{m_watch_lock};
     *m_watch_handle = m_rewatch_handle;
   }
 
-  finish(0);
+  finish(r);
 }
 
 void RewatchRequest::finish(int r) {

@@ -15,14 +15,13 @@
 #define CEPH_MGR_H_
 
 // Python.h comes first because otherwise it clobbers ceph's assert
-#include "PythonCompat.h"
+#include <Python.h>
 
 #include "mds/FSMap.h"
 #include "messages/MFSMap.h"
 #include "msg/Messenger.h"
 #include "auth/Auth.h"
 #include "common/Finisher.h"
-#include "common/Timer.h"
 #include "mon/MgrMap.h"
 
 #include "DaemonServer.h"
@@ -45,14 +44,13 @@ protected:
   Client    *client;
   Messenger *client_messenger;
 
-  mutable Mutex lock;
-  SafeTimer timer;
+  mutable ceph::mutex lock = ceph::make_mutex("Mgr::lock");
   Finisher finisher;
 
   // Track receipt of initial data during startup
-  Cond fs_map_cond;
+  ceph::condition_variable fs_map_cond;
   bool digest_received;
-  Cond digest_cond;
+  ceph::condition_variable digest_cond;
 
   PyModuleRegistry *py_module_registry;
   DaemonStateIndex daemon_state;
@@ -82,20 +80,21 @@ public:
     return server.get_myaddrs();
   }
 
-  void handle_mgr_digest(MMgrDigest* m);
-  void handle_fs_map(MFSMap* m);
+  void handle_mgr_digest(ceph::ref_t<MMgrDigest> m);
+  void handle_fs_map(ceph::ref_t<MFSMap> m);
   void handle_osd_map();
-  void handle_log(MLog *m);
-  void handle_service_map(MServiceMap *m);
+  void handle_log(ceph::ref_t<MLog> m);
+  void handle_service_map(ceph::ref_t<MServiceMap> m);
+  void handle_mon_map();
 
   bool got_mgr_map(const MgrMap& m);
 
-  bool ms_dispatch(Message *m);
-
-  void tick();
+  bool ms_dispatch2(const ceph::ref_t<Message>& m);
 
   void background_init(Context *completion);
   void shutdown();
+
+  void handle_signal(int signum);
 
   std::map<std::string, std::string> get_services() const;
 };

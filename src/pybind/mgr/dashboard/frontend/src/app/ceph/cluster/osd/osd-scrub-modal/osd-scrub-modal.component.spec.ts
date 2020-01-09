@@ -2,11 +2,11 @@ import { NO_ERRORS_SCHEMA } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ReactiveFormsModule } from '@angular/forms';
 
-import { BsModalRef } from 'ngx-bootstrap';
-
+import { BsModalRef } from 'ngx-bootstrap/modal';
+import { configureTestBed, i18nProviders } from '../../../../../testing/unit-test-helper';
 import { OsdService } from '../../../../shared/api/osd.service';
+import { JoinPipe } from '../../../../shared/pipes/join.pipe';
 import { NotificationService } from '../../../../shared/services/notification.service';
-import { configureTestBed } from '../../../../shared/unit-test-helper';
 import { OsdScrubModalComponent } from './osd-scrub-modal.component';
 
 describe('OsdScrubModalComponent', () => {
@@ -15,30 +15,26 @@ describe('OsdScrubModalComponent', () => {
 
   const fakeService = {
     list: () => {
-      return new Promise(function(resolve, reject) {
-        return {};
-      });
+      return new Promise(() => {});
     },
-    scrub: (data: any) => {
-      return new Promise(function(resolve, reject) {
-        return {};
-      });
+    scrub: () => {
+      return new Promise(() => {});
     },
-    scrub_many: (data: any) => {
-      return new Promise(function(resolve, reject) {
-        return {};
-      });
+    scrub_many: () => {
+      return new Promise(() => {});
     }
   };
 
   configureTestBed({
     imports: [ReactiveFormsModule],
-    declarations: [OsdScrubModalComponent],
+    declarations: [OsdScrubModalComponent, JoinPipe],
     schemas: [NO_ERRORS_SCHEMA],
     providers: [
       BsModalRef,
+      JoinPipe,
       { provide: OsdService, useValue: fakeService },
-      { provide: NotificationService, useValue: fakeService }
+      { provide: NotificationService, useValue: fakeService },
+      i18nProviders
     ]
   });
 

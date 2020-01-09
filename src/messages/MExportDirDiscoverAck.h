@@ -18,26 +18,30 @@
 #include "msg/Message.h"
 #include "include/types.h"
 
-class MExportDirDiscoverAck : public Message {
+class MExportDirDiscoverAck : public SafeMessage {
+private:
+  static const int HEAD_VERSION = 1;
+  static const int COMPAT_VERSION = 1;
+
   dirfrag_t dirfrag;
   bool success;
 
  public:
-  inodeno_t get_ino() { return dirfrag.ino; }
-  dirfrag_t get_dirfrag() { return dirfrag; }
-  bool is_success() { return success; }
+  inodeno_t get_ino() const { return dirfrag.ino; }
+  dirfrag_t get_dirfrag() const { return dirfrag; }
+  bool is_success() const { return success; }
 
-  MExportDirDiscoverAck() : Message(MSG_MDS_EXPORTDIRDISCOVERACK) {}
+protected:
+  MExportDirDiscoverAck() : SafeMessage{MSG_MDS_EXPORTDIRDISCOVERACK, HEAD_VERSION, COMPAT_VERSION} {}
   MExportDirDiscoverAck(dirfrag_t df, uint64_t tid, bool s=true) :
-    Message(MSG_MDS_EXPORTDIRDISCOVERACK),
+    SafeMessage{MSG_MDS_EXPORTDIRDISCOVERACK, HEAD_VERSION, COMPAT_VERSION},
     dirfrag(df), success(s) {
     set_tid(tid);
   }
-private:
   ~MExportDirDiscoverAck() override {}
 
 public:
-  const char *get_type_name() const override { return "ExDisA"; }
+  std::string_view get_type_name() const override { return "ExDisA"; }
   void print(ostream& o) const override {
     o << "export_discover_ack(" << dirfrag;
     if (success) 
@@ -56,6 +60,9 @@ public:
     encode(dirfrag, payload);
     encode(success, payload);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

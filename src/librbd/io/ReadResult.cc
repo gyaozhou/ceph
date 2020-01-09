@@ -23,7 +23,7 @@ struct ReadResult::SetClipLengthVisitor : public boost::static_visitor<void> {
   }
 
   void operator()(Linear &linear) const {
-    assert(length <= linear.buf_len);
+    ceph_assert(length <= linear.buf_len);
     linear.buf_len = length;
   }
 
@@ -66,7 +66,7 @@ struct ReadResult::AssembleResultVisitor : public boost::static_visitor<void> {
       it.copy(len, static_cast<char *>(vector.iov[idx].iov_base));
       offset += len;
     }
-    assert(offset == bl.length());
+    ceph_assert(offset == bl.length());
   }
 
   void operator()(Bufferlist &bufferlist) const {
@@ -76,6 +76,18 @@ struct ReadResult::AssembleResultVisitor : public boost::static_visitor<void> {
     ldout(cct, 20) << "moved resulting " << bufferlist.bl->length() << " "
                    << "bytes to bl " << reinterpret_cast<void*>(bufferlist.bl)
                    << dendl;
+  }
+
+  void operator()(SparseBufferlist &sparse_bufferlist) const {
+    sparse_bufferlist.extent_map->clear();
+    sparse_bufferlist.bl->clear();
+    destriper.assemble_result(cct, sparse_bufferlist.extent_map,
+                              sparse_bufferlist.bl);
+
+    ldout(cct, 20) << "moved resulting " << sparse_bufferlist.extent_map->size()
+                   << " extents of total " << sparse_bufferlist.bl->length()
+                   << " bytes to bl "
+                   << reinterpret_cast<void*>(sparse_bufferlist.bl) << dendl;
   }
 };
 
@@ -94,12 +106,12 @@ void ReadResult::C_ImageReadRequest::finish(int r) {
     for (auto &image_extent : image_extents) {
       length += image_extent.second;
     }
-    assert(length == bl.length());
+    ceph_assert(length == bl.length());
 
-    aio_completion->lock.Lock();
+    aio_completion->lock.lock();
     aio_completion->read_result.m_destriper.add_partial_result(
       cct, bl, image_extents);
-    aio_completion->lock.Unlock();
+    aio_completion->lock.unlock();
     r = length;
   }
 
@@ -108,7 +120,7 @@ void ReadResult::C_ImageReadRequest::finish(int r) {
 
 ReadResult::C_ObjectReadRequest::C_ObjectReadRequest(
     AioCompletion *aio_completion, uint64_t object_off, uint64_t object_len,
-    Extents&& buffer_extents)
+    LightweightBufferExtents&& buffer_extents)
   : aio_completion(aio_completion), object_off(object_off),
     object_len(object_len), buffer_extents(std::move(buffer_extents)) {
   aio_completion->add_request();
@@ -126,15 +138,16 @@ void ReadResult::C_ObjectReadRequest::finish(int r) {
     ldout(cct, 10) << " got " << extent_map
                    << " for " << buffer_extents
                    << " bl " << bl.length() << dendl;
-    // handle the case where a sparse-read wasn't issued
-    if (extent_map.empty()) {
-      extent_map[object_off] = bl.length();
+    aio_completion->lock.lock();
+    if (!extent_map.empty()) {
+      aio_completion->read_result.m_destriper.add_partial_sparse_result(
+        cct, bl, extent_map, object_off, buffer_extents);
+    } else {
+      // handle the case where a sparse-read wasn't issued
+      aio_completion->read_result.m_destriper.add_partial_result(
+        cct, std::move(bl), buffer_extents);
     }
-
-    aio_completion->lock.Lock();
-    aio_completion->read_result.m_destriper.add_partial_sparse_result(
-      cct, bl, extent_map, object_off, buffer_extents);
-    aio_completion->lock.Unlock();
+    aio_completion->lock.unlock();
 
     r = object_len;
   }
@@ -155,6 +168,11 @@ ReadResult::ReadResult(const struct iovec *iov, int iov_count)
 
 ReadResult::ReadResult(ceph::bufferlist *bl)
   : m_buffer(Bufferlist(bl)) {
+}
+
+ReadResult::ReadResult(std::map<uint64_t, uint64_t> *extent_map,
+                       ceph::bufferlist *bl)
+  : m_buffer(SparseBufferlist(extent_map, bl)) {
 }
 
 void ReadResult::set_clip_length(size_t length) {

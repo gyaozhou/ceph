@@ -1,14 +1,14 @@
 
-===============================
-Ceph filesystem client eviction
-===============================
+================================
+Ceph file system client eviction
+================================
 
-When a filesystem client is unresponsive or otherwise misbehaving, it
-may be necessary to forcibly terminate its access to the filesystem.  This
+When a file system client is unresponsive or otherwise misbehaving, it
+may be necessary to forcibly terminate its access to the file system.  This
 process is called *eviction*.
 
 Evicting a CephFS client prevents it from communicating further with MDS
-daemons and OSD daemons.  If a client was doing buffered IO to the filesystem,
+daemons and OSD daemons.  If a client was doing buffered IO to the file system,
 any un-flushed data will be lost.
 
 Clients may either be evicted automatically (if they fail to communicate
@@ -21,17 +21,21 @@ libcephfs.
 Automatic client eviction
 =========================
 
-There are two situations in which a client may be evicted automatically:
+There are three situations in which a client may be evicted automatically.
 
-On an active MDS daemon, if a client has not communicated with the MDS for over
-``session_autoclose`` (a file system variable) seconds (300 seconds by
-default), then it will be evicted automatically.
+#. On an active MDS daemon, if a client has not communicated with the MDS for over
+   ``session_autoclose`` (a file system variable) seconds (300 seconds by
+   default), then it will be evicted automatically.
 
-During MDS startup (including on failover), the MDS passes through a
-state called ``reconnect``.  During this state, it waits for all the
-clients to connect to the new MDS daemon.  If any clients fail to do
-so within the time window (``mds_reconnect_timeout``, 45 seconds by default)
-then they will be evicted.
+#. On an active MDS daemon, if a client has not responded to cap revoke messages
+   for over ``mds_cap_revoke_eviction_timeout`` (configuration option) seconds.
+   This is disabled by default.
+
+#. During MDS startup (including on failover), the MDS passes through a
+   state called ``reconnect``.  During this state, it waits for all the
+   clients to connect to the new MDS daemon.  If any clients fail to do
+   so within the time window (``mds_reconnect_timeout``, 45 seconds by default)
+   then they will be evicted.
 
 A warning message is sent to the cluster log if either of these situations
 arises.

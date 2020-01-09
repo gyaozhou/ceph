@@ -6,7 +6,7 @@ Placement Groups Never Get Clean
 ================================
 
 When you create a cluster and your cluster remains in ``active``,
-``active+remapped`` or ``active+degraded`` status and never achieve an
+``active+remapped`` or ``active+degraded`` status and never achieves an
 ``active+clean`` status, you likely have a problem with your configuration.
 
 You may need to review settings in the `Pool, PG and CRUSH Config Reference`_
@@ -213,7 +213,7 @@ assumed to be preferable to returning an IO error to the user.
 
 First, you can identify which objects are unfound with::
 
-	ceph pg 2.4 list_missing [starting offset, in json]
+	ceph pg 2.4 list_unfound [starting offset, in json]
 
 .. code-block:: javascript
 
@@ -476,7 +476,7 @@ If the Ceph cluster only has 8 OSDs and the erasure coded pool needs
 coded pool that requires less OSDs::
 
      ceph osd erasure-code-profile set myprofile k=5 m=3
-     ceph osd pool create erasurepool 16 16 erasure myprofile
+     ceph osd pool create erasurepool erasure myprofile
 
 or add a new OSDs and the PG will automatically use them.
 
@@ -515,7 +515,7 @@ You can resolve the problem by creating a new pool in which PGs are allowed
 to have OSDs residing on the same host with::
 
      ceph osd erasure-code-profile set myprofile crush-failure-domain=osd
-     ceph osd pool create erasurepool 16 16 erasure myprofile
+     ceph osd pool create erasurepool erasure myprofile
 
 CRUSH gives up too soon
 -----------------------
@@ -569,7 +569,7 @@ rule needs, ``--rule`` is the value of the ``ruleset`` field
 displayed by ``ceph osd crush rule dump``.  The test will try mapping
 one million values (i.e. the range defined by ``[--min-x,--max-x]``)
 and must display at least one bad mapping. If it outputs nothing it
-means all mappings are successfull and you can stop right there: the
+means all mappings are successful and you can stop right there: the
 problem is elsewhere.
 
 The CRUSH rule can be edited by decompiling the crush map::

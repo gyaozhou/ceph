@@ -41,7 +41,7 @@
 #include "toeplitz.h"
 
 #include "common/dout.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 #define dout_subsys ceph_subsys_dpdk
 #undef dout_prefix
@@ -72,6 +72,17 @@ enum {
   l_dpdk_total_linearize_operations,
   l_dpdk_qp_last
 };
+
+struct icmp_hdr {
+  enum class msg_type : uint8_t {
+    echo_reply = 0,
+    echo_request = 8,
+  };
+  msg_type type;
+  uint8_t code;
+  uint16_t csum;
+  uint32_t rest;
+} __attribute__((packed));
 
 ipv4::ipv4(CephContext *c, EventCenter *cen, interface* netif)
   : cct(c), center(cen), _netif(netif), _global_arp(netif),

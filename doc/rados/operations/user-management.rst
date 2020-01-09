@@ -1,3 +1,5 @@
+.. _user-management:
+
 =================
  User Management
 =================
@@ -79,11 +81,11 @@ type. So ``client.user1`` can be entered simply as ``user1``. If you specify
 wherever possible.
 
 .. note:: A Ceph Storage Cluster user is not the same as a Ceph Object Storage
-   user or a Ceph Filesystem user. The Ceph Object Gateway uses a Ceph Storage
+   user or a Ceph File System user. The Ceph Object Gateway uses a Ceph Storage
    Cluster user to communicate between the gateway daemon and the storage
    cluster, but the gateway has its own user management functionality for end
-   users. The Ceph Filesystem uses POSIX semantics. The user space associated
-   with the Ceph Filesystem is not the same as a Ceph Storage Cluster user.
+   users. The Ceph File System uses POSIX semantics. The user space associated
+   with the Ceph File System is not the same as a Ceph Storage Cluster user.
 
 
 
@@ -104,7 +106,7 @@ Capability syntax follows the form::
 - **Monitor Caps:** Monitor capabilities include ``r``, ``w``, ``x`` access
   settings or ``profile {name}``. For example::
 
-	mon 'allow {access-spec}'
+	mon 'allow {access-spec} [network {network/prefix}]'
 
 	mon 'profile {name}'
 
@@ -112,13 +114,18 @@ Capability syntax follows the form::
 
         * | all | [r][w][x]
 
+  The optional ``{network/prefix}`` is a standard network name and
+  prefix length in CIDR notation (e.g., ``10.3.0.0/16``).  If present,
+  the use of this capability is restricted to clients connecting from
+  this network.
+
 - **OSD Caps:** OSD capabilities include ``r``, ``w``, ``x``, ``class-read``,
   ``class-write`` access settings or ``profile {name}``. Additionally, OSD
   capabilities also allow for pool and namespace settings. ::
 
-	osd 'allow {access-spec} [{match-spec}]'
+	osd 'allow {access-spec} [{match-spec}] [network {network/prefix}]'
 
-	osd 'profile {name} [pool={pool-name} [namespace={namespace-name}]]'
+	osd 'profile {name} [pool={pool-name} [namespace={namespace-name}]] [network {network/prefix}]'
 
   The ``{access-spec}`` syntax is either of the following: ::
 
@@ -131,6 +138,40 @@ Capability syntax follows the form::
         pool={pool-name} [namespace={namespace-name}] [object_prefix {prefix}]
 
         [namespace={namespace-name}] tag {application} {key}={value}
+
+  The optional ``{network/prefix}`` is a standard network name and
+  prefix length in CIDR notation (e.g., ``10.3.0.0/16``).  If present,
+  the use of this capability is restricted to clients connecting from
+  this network.
+
+- **Manager Caps:** Manager (``ceph-mgr``) capabilities include
+  ``r``, ``w``, ``x`` access settings or ``profile {name}``. For example: ::
+
+	mgr 'allow {access-spec} [network {network/prefix}]'
+
+	mgr 'profile {name} [{key1} {match-type} {value1} ...] [network {network/prefix}]'
+
+  Manager capabilities can also be specified for specific commands,
+  all commands exported by a built-in manager service, or all commands
+  exported by a specific add-on module. For example: ::
+
+        mgr 'allow command "{command-prefix}" [with {key1} {match-type} {value1} ...] [network {network/prefix}]'
+
+        mgr 'allow service {service-name} {access-spec} [network {network/prefix}]'
+
+        mgr 'allow module {module-name} [with {key1} {match-type} {value1} ...] {access-spec} [network {network/prefix}]'
+
+  The ``{access-spec}`` syntax is as follows: ::
+
+        * | all | [r][w][x]
+
+  The ``{service-name}`` is one of the following: ::
+
+        mgr | osd | pg | py
+
+  The ``{match-type}`` is one of the following: ::
+
+        = | prefix | regex
 
 - **Metadata Server Caps:** For administrators, use ``allow *``.  For all
   other users, such as CephFS clients, consult :doc:`/cephfs/client-auth`
@@ -214,16 +255,41 @@ The following entries describe valid capability profiles:
               so they have permissions to add keys, etc. when bootstrapping
               a metadata server.
 
-``profile rbd`` (Monitor and OSD)
+``profile bootstrap-rbd`` (Monitor only)
+
+:Description: Gives a user permissions to bootstrap an RBD user.
+              Conferred on deployment tools such as ``ceph-deploy``, etc.
+              so they have permissions to add keys, etc. when bootstrapping
+              an RBD user.
+
+``profile bootstrap-rbd-mirror`` (Monitor only)
+
+:Description: Gives a user permissions to bootstrap an ``rbd-mirror`` daemon
+              user. Conferred on deployment tools such as ``ceph-deploy``, etc.
+              so they have permissions to add keys, etc. when bootstrapping
+              an ``rbd-mirror`` daemon.
+
+``profile rbd`` (Manager, Monitor, and OSD)
 
 :Description: Gives a user permissions to manipulate RBD images. When used
               as a Monitor cap, it provides the minimal privileges required
-              by an RBD client application. When used as an OSD cap, it
-              provides read-write access to an RBD client application.
+              by an RBD client application; this includes the ability
+	      to blacklist other client users. When used as an OSD cap, it
+              provides read-write access to the specified pool to an
+	      RBD client application. The Manager cap supports optional
+              ``pool`` and ``namespace`` keyword arguments.
 
-``profile rbd-read-only`` (OSD only)
+``profile rbd-mirror`` (Monitor only)
 
-:Description: Gives a user read-only permissions to RBD images.
+:Description: Gives a user permissions to manipulate RBD images and retrieve
+              RBD mirroring config-key secrets. It provides the minimal
+              privileges required for the ``rbd-mirror`` daemon.
+
+``profile rbd-read-only`` (Manager and OSD)
+
+:Description: Gives a user read-only permissions to RBD images. The Manager
+              cap supports optional ``pool`` and ``namespace`` keyword
+              arguments.
 
 
 Pool
@@ -346,8 +412,7 @@ save the output to a file. Developers may also execute the following::
 
 	ceph auth export {TYPE.ID}
 
-The ``auth export`` command is identical to ``auth get``, but also prints
-out the internal ``auid``, which is not relevant to end users.
+The ``auth export`` command is identical to ``auth get``.
 
 
 
@@ -417,12 +482,6 @@ For example::
 	ceph auth caps client.john mon 'allow r' osd 'allow rw pool=liverpool'
 	ceph auth caps client.paul mon 'allow rw' osd 'allow rwx pool=liverpool'
 	ceph auth caps client.brian-manager mon 'allow *' osd 'allow *'
-
-To remove a capability, you may reset the capability. If you want the user
-to have no access to a particular daemon that was previously set, specify
-an empty string. For example::
-
-	ceph auth caps client.ringo mon ' ' osd ' '
 
 See `Authorization (Capabilities)`_ for additional details on capabilities.
 

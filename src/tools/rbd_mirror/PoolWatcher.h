@@ -11,12 +11,12 @@
 
 #include "common/AsyncOpTracker.h"
 #include "common/ceph_context.h"
-#include "common/Mutex.h"
+#include "common/ceph_mutex.h"
 #include "include/rados/librados.hpp"
-#include "types.h"
+#include "tools/rbd_mirror/Types.h"
 #include <boost/functional/hash.hpp>
 #include <boost/optional.hpp>
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "tools/rbd_mirror/pool_watcher/Types.h"
 
 namespace librbd { struct ImageCtx; }
@@ -51,7 +51,7 @@ public:
   void shut_down(Context *on_finish);
 
   inline uint64_t get_image_count() const {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     return m_image_ids.size();
   }
 
@@ -109,7 +109,7 @@ private:
   ImageIds m_refresh_image_ids;
   bufferlist m_out_bl;
 
-  mutable Mutex m_lock;
+  mutable ceph::mutex m_lock;
 
   Context *m_on_init_finish = nullptr;
 

@@ -25,6 +25,8 @@ struct MockTestImageCtx : public librbd::MockImageCtx {
   explicit MockTestImageCtx(librbd::ImageCtx &image_ctx)
     : librbd::MockImageCtx(image_ctx) {
   }
+
+  MockTestImageCtx *parent = nullptr;
 };
 
 } // anonymous namespace
@@ -46,7 +48,7 @@ struct ImageRequest<MockTestImageCtx> {
   static void aio_read(MockTestImageCtx *ictx, AioCompletion *c,
                        Extents &&image_extents, ReadResult &&read_result,
                        int op_flags, const ZTracer::Trace &parent_trace) {
-    assert(s_instance != nullptr);
+    ceph_assert(s_instance != nullptr);
     s_instance->aio_read(c, image_extents);
   }
   MOCK_METHOD2(aio_read, void(AioCompletion *, const Extents&));
@@ -62,7 +64,7 @@ ImageRequest<MockTestImageCtx> *ImageRequest<MockTestImageCtx>::s_instance = nul
 #include "librbd/deep_copy/ObjectCopyRequest.cc"
 template class librbd::deep_copy::ObjectCopyRequest<librbd::MockTestImageCtx>;
 
-bool operator==(const SnapContext& rhs, const SnapContext& lhs) {
+static bool operator==(const SnapContext& rhs, const SnapContext& lhs) {
   return (rhs.seq == lhs.seq && rhs.snaps == lhs.snaps);
 }
 
@@ -147,6 +149,13 @@ public:
     mock_image_ctx.exclusive_lock = &mock_exclusive_lock;
   }
 
+  void expect_get_object_count(librbd::MockImageCtx& mock_image_ctx) {
+    EXPECT_CALL(mock_image_ctx, get_object_count(_))
+      .WillRepeatedly(Invoke([&mock_image_ctx](librados::snap_t snap_id) {
+          return mock_image_ctx.image_ctx->get_object_count(snap_id);
+        }));
+  }
+
   void expect_test_features(librbd::MockImageCtx &mock_image_ctx) {
     EXPECT_CALL(mock_image_ctx, test_features(_))
       .WillRepeatedly(WithArg<0>(Invoke([&mock_image_ctx](uint64_t features) {
@@ -158,8 +167,7 @@ public:
     if ((m_src_image_ctx->features & RBD_FEATURE_EXCLUSIVE_LOCK) == 0) {
       return;
     }
-    EXPECT_CALL(mock_exclusive_lock, start_op()).WillOnce(
-      ReturnNew<FunctionContext>([](int) {}));
+    EXPECT_CALL(mock_exclusive_lock, start_op(_)).WillOnce(Return(new LambdaContext([](int){})));
   }
 
   void expect_list_snaps(librbd::MockTestImageCtx &mock_image_ctx,
@@ -198,9 +206,8 @@ public:
       librbd::MockTestImageCtx &mock_src_image_ctx,
       librbd::MockTestImageCtx &mock_dst_image_ctx, Context *on_finish) {
     expect_get_object_name(mock_dst_image_ctx);
-    return new MockObjectCopyRequest(&mock_src_image_ctx, nullptr,
-                                     &mock_dst_image_ctx, m_snap_map, 0, false,
-                                     on_finish);
+    return new MockObjectCopyRequest(&mock_src_image_ctx, &mock_dst_image_ctx,
+                                     m_snap_map, 0, false, on_finish);
   }
 
   void expect_set_snap_read(librados::MockTestMemIoCtxImpl &mock_io_ctx,
@@ -275,18 +282,17 @@ public:
                                 librados::snap_t snap_id, uint8_t state,
                                 int r) {
     if (mock_image_ctx.image_ctx->object_map != nullptr) {
-      auto &expect = EXPECT_CALL(mock_object_map, aio_update(snap_id, 0, 1, state, _, _, _));
+      auto &expect = EXPECT_CALL(mock_object_map, aio_update(snap_id, 0, 1, state, _, _, false, _));
       if (r < 0) {
-        expect.WillOnce(DoAll(WithArg<6>(Invoke([this, r](Context *ctx) {
+        expect.WillOnce(DoAll(WithArg<7>(Invoke([this, r](Context *ctx) {
                                   m_work_queue->queue(ctx, r);
                                 })),
                               Return(true)));
       } else {
-        expect.WillOnce(DoAll(WithArg<6>(Invoke([&mock_image_ctx, snap_id, state](Context *ctx) {
-                                  assert(mock_image_ctx.image_ctx->snap_lock.is_locked());
-                                  assert(mock_image_ctx.image_ctx->object_map_lock.is_wlocked());
+        expect.WillOnce(DoAll(WithArg<7>(Invoke([&mock_image_ctx, snap_id, state](Context *ctx) {
+                                  ceph_assert(ceph_mutex_is_locked(mock_image_ctx.image_ctx->image_lock));
                                   mock_image_ctx.image_ctx->object_map->aio_update<Context>(
-                                    snap_id, 0, 1, state, boost::none, {}, ctx);
+                                    snap_id, 0, 1, state, boost::none, {}, false, ctx);
                                 })),
                               Return(true)));
       }
@@ -444,6 +450,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, DNE) {
   librbd::MockObjectMap mock_object_map;
   mock_dst_image_ctx.object_map = &mock_object_map;
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -456,7 +463,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, DNE) {
   expect_list_snaps(mock_src_image_ctx, mock_src_io_ctx, -ENOENT);
 
   request->send();
-  ASSERT_EQ(0, ctx.wait());
+  ASSERT_EQ(-ENOENT, ctx.wait());
 }
 
 TEST_F(TestMockDeepCopyObjectCopyRequest, Write) {
@@ -475,6 +482,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, Write) {
   mock_dst_image_ctx.object_map = &mock_object_map;
 
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -520,6 +528,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, ReadMissingStaleSnapSet) {
   mock_dst_image_ctx.object_map = &mock_object_map;
 
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -652,6 +661,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, WriteError) {
   mock_dst_image_ctx.object_map = &mock_object_map;
 
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -700,6 +710,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, WriteSnaps) {
   mock_dst_image_ctx.object_map = &mock_object_map;
 
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -740,6 +751,8 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, WriteSnaps) {
 TEST_F(TestMockDeepCopyObjectCopyRequest, Trim) {
   ASSERT_EQ(0, m_src_image_ctx->operations->metadata_set(
               "conf_rbd_skip_partial_discard", "false"));
+  m_src_image_ctx->discard_granularity_bytes = 0;
+
   // scribble some data
   interval_set<uint64_t> one;
   scribble(m_src_image_ctx, 10, 102400, &one);
@@ -748,7 +761,8 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, Trim) {
   // trim the object
   uint64_t trim_offset = rand() % one.range_end();
   ASSERT_LE(0, m_src_image_ctx->io_work_queue->discard(
-    trim_offset, one.range_end() - trim_offset, m_src_image_ctx->skip_partial_discard));
+    trim_offset, one.range_end() - trim_offset,
+    m_src_image_ctx->discard_granularity_bytes));
   ASSERT_EQ(0, create_snap("copy"));
 
   librbd::MockTestImageCtx mock_src_image_ctx(*m_src_image_ctx);
@@ -761,6 +775,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, Trim) {
   mock_dst_image_ctx.object_map = &mock_object_map;
 
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -800,7 +815,8 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, Remove) {
 
   // remove the object
   uint64_t object_size = 1 << m_src_image_ctx->order;
-  ASSERT_LE(0, m_src_image_ctx->io_work_queue->discard(0, object_size, m_src_image_ctx->skip_partial_discard));
+  ASSERT_LE(0, m_src_image_ctx->io_work_queue->discard(
+    0, object_size, m_src_image_ctx->discard_granularity_bytes));
   ASSERT_EQ(0, create_snap("copy"));
   librbd::MockTestImageCtx mock_src_image_ctx(*m_src_image_ctx);
   librbd::MockTestImageCtx mock_dst_image_ctx(*m_dst_image_ctx);
@@ -812,6 +828,7 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, Remove) {
   mock_dst_image_ctx.object_map = &mock_object_map;
 
   expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
 
   C_SaferCond ctx;
   MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
@@ -842,6 +859,49 @@ TEST_F(TestMockDeepCopyObjectCopyRequest, Remove) {
   request->send();
   ASSERT_EQ(0, ctx.wait());
   ASSERT_EQ(0, compare_objects());
+}
+
+TEST_F(TestMockDeepCopyObjectCopyRequest, ObjectMapUpdateError) {
+  REQUIRE_FEATURE(RBD_FEATURE_OBJECT_MAP);
+
+  // scribble some data
+  interval_set<uint64_t> one;
+  scribble(m_src_image_ctx, 10, 102400, &one);
+
+  ASSERT_EQ(0, create_snap("copy"));
+  librbd::MockTestImageCtx mock_src_image_ctx(*m_src_image_ctx);
+  librbd::MockTestImageCtx mock_dst_image_ctx(*m_dst_image_ctx);
+
+  librbd::MockExclusiveLock mock_exclusive_lock;
+  prepare_exclusive_lock(mock_dst_image_ctx, mock_exclusive_lock);
+
+  librbd::MockObjectMap mock_object_map;
+  mock_dst_image_ctx.object_map = &mock_object_map;
+
+  expect_test_features(mock_dst_image_ctx);
+  expect_get_object_count(mock_dst_image_ctx);
+
+  C_SaferCond ctx;
+  MockObjectCopyRequest *request = create_request(mock_src_image_ctx,
+                                                  mock_dst_image_ctx, &ctx);
+
+  librados::MockTestMemIoCtxImpl &mock_src_io_ctx(get_mock_io_ctx(
+    request->get_src_io_ctx()));
+  librados::MockTestMemIoCtxImpl &mock_dst_io_ctx(get_mock_io_ctx(
+    request->get_dst_io_ctx()));
+
+  InSequence seq;
+  expect_list_snaps(mock_src_image_ctx, mock_src_io_ctx, 0);
+  expect_set_snap_read(mock_src_io_ctx, m_src_snap_ids[0]);
+  expect_sparse_read(mock_src_io_ctx, 0, one.range_end(), 0);
+  expect_start_op(mock_exclusive_lock);
+  expect_write(mock_dst_io_ctx, 0, one.range_end(), {0, {}}, 0);
+  expect_start_op(mock_exclusive_lock);
+  expect_update_object_map(mock_dst_image_ctx, mock_object_map,
+                           m_dst_snap_ids[0], OBJECT_EXISTS, -EBLACKLISTED);
+
+  request->send();
+  ASSERT_EQ(-EBLACKLISTED, ctx.wait());
 }
 
 } // namespace deep_copy

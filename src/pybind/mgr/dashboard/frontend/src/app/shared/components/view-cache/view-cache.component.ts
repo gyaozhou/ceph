@@ -1,6 +1,6 @@
 import { Component, Input, OnInit } from '@angular/core';
 
-import { ViewCacheStatus } from '../../../shared/enum/view-cache-status.enum';
+import { ViewCacheStatus } from '../../enum/view-cache-status.enum';
 
 @Component({
   selector: 'cd-view-cache',
@@ -8,8 +8,10 @@ import { ViewCacheStatus } from '../../../shared/enum/view-cache-status.enum';
   styleUrls: ['./view-cache.component.scss']
 })
 export class ViewCacheComponent implements OnInit {
-  @Input() status: ViewCacheStatus;
-  @Input() statusFor: string;
+  @Input()
+  status: ViewCacheStatus;
+  @Input()
+  statusFor: string;
   vcs = ViewCacheStatus;
 
   constructor() {}

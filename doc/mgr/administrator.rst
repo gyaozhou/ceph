@@ -75,7 +75,7 @@ daemon, if the client tries to connect to a standby.
 Consult the documentation pages for individual manager modules for more
 information about what functionality each module provides.
 
-Here is an example of enabling the ``dashboard`` module:
+Here is an example of enabling the :term:`Dashboard` module:
 
 ::
 
@@ -109,22 +109,27 @@ Here is an example of enabling the ``dashboard`` module:
 	}
 
 
+The first time the cluster starts, it uses the ``mgr_initial_modules``
+setting to override which modules to enable.  However, this setting
+is ignored through the rest of the lifetime of the cluster: only
+use it for bootstrapping.  For example, before starting your
+monitor daemons for the first time, you might add a section like
+this to your ``ceph.conf``:
+
+::
+
+    [mon]
+        mgr initial modules = dashboard balancer
+
 Calling module commands
 -----------------------
 
 Where a module implements command line hooks, the commands will
-be accessible as ordinary Ceph commands::
+be accessible as ordinary Ceph commands.  Ceph will automatically incorporate
+module commands into the standard CLI interface and route them appropriately to
+the module.::
 
     ceph <command | help>
-
-If you would like to see the list of commands handled by the
-manager (where normal ``ceph help`` would show all mon and mgr commands),
-you can send a command directly to the manager daemon::
-
-    ceph tell mgr help
-
-Note that it is not necessary to address a particular mgr instance,
-simply ``mgr`` will pick the current active daemon.
 
 Configuration
 -------------

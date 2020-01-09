@@ -18,18 +18,23 @@
 #define PY_FORMATTER_H_
 
 // Python.h comes first because otherwise it clobbers ceph's assert
-#include "PythonCompat.h"
+#include <Python.h>
 
 #include <stack>
+#include <string>
+#include <string_view>
+#include <sstream>
 #include <memory>
 #include <list>
 
 #include "common/Formatter.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 class PyFormatter : public ceph::Formatter
 {
 public:
+  PyFormatter (const PyFormatter&) = delete;
+  PyFormatter& operator= (const PyFormatter&) = delete;
   PyFormatter(bool pretty = false, bool array = false)
   {
     // It is forbidden to instantiate me outside of the GIL,
@@ -76,8 +81,8 @@ public:
   void open_object_section(const char *name) override;
   void close_section() override
   {
-    assert(cursor != root);
-    assert(!stack.empty());
+    ceph_assert(cursor != root);
+    ceph_assert(!stack.empty());
     cursor = stack.top();
     stack.pop();
   }
@@ -91,20 +96,20 @@ public:
 
   void flush(std::ostream& os) override
   {
-      // This class is not a serializer: this doens't make sense
+      // This class is not a serializer: this doesn't make sense
       ceph_abort();
   }
 
   int get_len() const override
   {
-      // This class is not a serializer: this doens't make sense
+      // This class is not a serializer: this doesn't make sense
       ceph_abort();
       return 0;
   }
 
   void write_raw_data(const char *data) override
   {
-      // This class is not a serializer: this doens't make sense
+      // This class is not a serializer: this doesn't make sense
       ceph_abort();
   }
 

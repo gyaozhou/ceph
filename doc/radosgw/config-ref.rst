@@ -22,7 +22,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
               `HTTP Frontends`_ for more on supported options.
 
 :Type: String
-:Default: ``civetweb port=7480``
+:Default: ``beast port=7480``
 
 ``rgw data``
 
@@ -34,6 +34,11 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 ``rgw enable apis``
 
 :Description: Enables the specified APIs.
+
+              .. note:: Enabling the ``s3`` API is a requirement for
+                        any radosgw instance that is meant to
+                        participate in a `multi-site <../multisite>`_
+                        configuration.
 :Type: String
 :Default: ``s3, swift, swift_auth, admin`` All APIs.
 
@@ -50,14 +55,14 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 :Description: The number of entries in the Ceph Object Gateway cache.
 :Type: Integer
 :Default: ``10000``
-	
+
 
 ``rgw socket path``
 
-:Description: The socket path for the domain socket. ``FastCgiExternalServer`` 
-              uses this socket. If you do not specify a socket path, Ceph 
-              Object Gateway will not run as an external server. The path you 
-              specify here must be the same as the path specified in the 
+:Description: The socket path for the domain socket. ``FastCgiExternalServer``
+              uses this socket. If you do not specify a socket path, Ceph
+              Object Gateway will not run as an external server. The path you
+              specify here must be the same as the path specified in the
               ``rgw.conf`` file.
 
 :Type: String
@@ -71,7 +76,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw host``
 
-:Description: The host for the Ceph Object Gateway instance. Can be an IP 
+:Description: The host for the Ceph Object Gateway instance. Can be an IP
               address or a hostname.
 
 :Type: String
@@ -80,9 +85,9 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw port``
 
-:Description: Port the instance listens for requests. If not specified, 
+:Description: Port the instance listens for requests. If not specified,
               Ceph Object Gateway runs external FastCGI.
-              
+
 :Type: String
 :Default: None
 
@@ -90,9 +95,9 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 ``rgw dns name``
 
 :Description: The DNS name of the served domain. See also the ``hostnames`` setting within regions.
-:Type: String 
+:Type: String
 :Default: None
-	
+
 
 ``rgw script uri``
 
@@ -121,8 +126,8 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw remote addr param``
 
-:Description: The remote address parameter. For example, the HTTP field 
-              containing the remote address, or the ``X-Forwarded-For`` 
+:Description: The remote address parameter. For example, the HTTP field
+              containing the remote address, or the ``X-Forwarded-For``
               address if a reverse proxy is operational.
 
 :Type: String
@@ -130,38 +135,26 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 
 ``rgw op thread timeout``
-	
+
 :Description: The timeout in seconds for open threads.
 :Type: Integer
 :Default: 600
-	
+
 
 ``rgw op thread suicide timeout``
-	
-:Description: The time ``timeout`` in seconds before a Ceph Object Gateway 
+
+:Description: The time ``timeout`` in seconds before a Ceph Object Gateway
               process dies. Disabled if set to ``0``.
 
-:Type: Integer 
+:Type: Integer
 :Default: ``0``
 
 
 ``rgw thread pool size``
 
 :Description: The size of the thread pool.
-:Type: Integer 
-:Default: 100 threads.
-
-
-``rgw num rados handles``
-
-:Description: The number of `RADOS cluster handles`_ for Ceph Object Gateway.
-              Having a configurable number of RADOS handles is resulting in
-              significant performance boost for all types of workloads. Each RGW
-              worker thread would now get to pick a RADOS handle for its lifetime,
-              from the available bunch.
-
 :Type: Integer
-:Default: ``1``
+:Default: 100 threads.
 
 
 ``rgw num control oids``
@@ -175,7 +168,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw init timeout``
 
-:Description: The number of seconds before Ceph Object Gateway gives up on 
+:Description: The number of seconds before Ceph Object Gateway gives up on
               initialization.
 
 :Type: Integer
@@ -184,7 +177,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw mime types file``
 
-:Description: The path and location of the MIME types. Used for Swift 
+:Description: The path and location of the MIME types. Used for Swift
               auto-detection of object types.
 
 :Type: String
@@ -193,7 +186,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw gc max objs``
 
-:Description: The maximum number of objects that may be handled by 
+:Description: The maximum number of objects that may be handled by
               garbage collection in one garbage collection processing cycle.
 
 :Type: Integer
@@ -202,16 +195,16 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw gc obj min wait``
 
-:Description: The minimum wait time before the object may be removed 
+:Description: The minimum wait time before the object may be removed
               and handled by garbage collection processing.
-              
+
 :Type: Integer
 :Default: ``2 * 3600``
 
 
 ``rgw gc processor max time``
 
-:Description: The maximum time between the beginning of two consecutive garbage 
+:Description: The maximum time between the beginning of two consecutive garbage
               collection processing cycles.
 
 :Type: Integer
@@ -234,7 +227,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw resolve cname``
 
-:Description: Whether ``rgw`` should use DNS CNAME record of the request 
+:Description: Whether ``rgw`` should use DNS CNAME record of the request
               hostname field (if hostname is not equal to ``rgw dns name``).
 
 :Type: Boolean
@@ -265,7 +258,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw exit timeout secs``
 
-:Description: Number of seconds to wait for a process before exiting 
+:Description: Number of seconds to wait for a process before exiting
               unconditionally.
 
 :Type: Integer
@@ -287,7 +280,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 :Type: Integer
 :Default: ``4 << 20``
 
- 
+
 ``rgw relaxed s3 bucket names``
 
 :Description: Enables relaxed S3 bucket names rules for US region buckets.
@@ -319,7 +312,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw curl wait timeout ms``
 
-:Description: The timeout in milliseconds for certain ``curl`` calls. 
+:Description: The timeout in milliseconds for certain ``curl`` calls.
 :Type: Integer
 :Default: ``1000``
 
@@ -334,7 +327,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 ``rgw copy obj progress every bytes``
 
 :Description: The minimum bytes between copy progress output.
-:Type: Integer 
+:Type: Integer
 :Default: ``1024 * 1024``
 
 
@@ -347,7 +340,7 @@ instances or all radosgw-admin commands can be put into the ``[global]`` or the
 
 ``rgw content length compat``
 
-:Description: Enable compatability handling of FCGI requests with both CONTENT_LENGTH AND HTTP_CONTENT_LENGTH set.
+:Description: Enable compatibility handling of FCGI requests with both CONTENT_LENGTH AND HTTP_CONTENT_LENGTH set.
 :Type: Boolean
 :Default: ``false``
 
@@ -507,6 +500,15 @@ file under each ``[client.radosgw.{instance-name}]`` instance.
    ``rgw md log max shards`` should not be changed after sync has
    started.
 
+S3 Settings
+===========
+
+``rgw s3 auth use ldap``
+
+:Description: Should S3 authentication use LDAP.
+:Type: Boolean
+:Default: ``false``
+
 
 Swift Settings
 ==============
@@ -516,8 +518,8 @@ Swift Settings
 :Description: Enforces the Swift Access Control List (ACL) settings.
 :Type: Boolean
 :Default: ``true``
-	
-	
+
+
 ``rgw swift token expiration``
 
 :Description: The time in seconds for expiring a Swift token.
@@ -530,25 +532,40 @@ Swift Settings
 :Description: The URL for the Ceph Object Gateway Swift API.
 :Type: String
 :Default: None
-	
+
 
 ``rgw swift url prefix``
 
-:Description: The URL prefix for the Swift StorageURL that goes in front of
-              the "/v1" part. This allows to run several Gateway instances
-              on the same host. For compatibility, setting this configuration
-              variable to empty causes the default "/swift" to be used.
-              Use explicit prefix "/" to start StorageURL at the root.
-              WARNING: setting this option to "/" will NOT work if S3 API is
-              enabled. From the other side disabling S3 will make impossible
-              to deploy RadosGW in the multi-site configuration!
+:Description: The URL prefix for the Swift API, to distinguish it from
+              the S3 API endpoint. The default is ``swift``, which
+              makes the Swift API available at the URL
+              ``http://host:port/swift/v1`` (or
+              ``http://host:port/swift/v1/AUTH_%(tenant_id)s`` if
+              ``rgw swift account in url`` is enabled).
+
+              For compatibility, setting this configuration variable
+              to the empty string causes the default ``swift`` to be
+              used; if you do want an empty prefix, set this option to
+              ``/``.
+
+              .. warning:: If you set this option to ``/``, you must
+                           disable the S3 API by modifying ``rgw
+                           enable apis`` to exclude ``s3``. It is not
+                           possible to operate radosgw with ``rgw
+                           swift url prefix = /`` and simultaneously
+                           support both the S3 and Swift APIs. If you
+                           do need to support both APIs without
+                           prefixes, deploy multiple radosgw instances
+                           to listen on different hosts (or ports)
+                           instead, enabling some for S3 and some for
+                           Swift.
 :Default: ``swift``
 :Example: "/swift-testing"
 
 
 ``rgw swift auth url``
 
-:Description: Default URL for verifying v1 auth tokens (if not using internal 
+:Description: Default URL for verifying v1 auth tokens (if not using internal
               Swift auth).
 
 :Type: String
@@ -562,6 +579,35 @@ Swift Settings
 :Default: ``auth``
 
 
+``rgw swift account in url``
+
+:Description: Whether or not the Swift account name should be included
+              in the Swift API URL.
+
+              If set to ``false`` (the default), then the Swift API
+              will listen on a URL formed like
+              ``http://host:port/<rgw_swift_url_prefix>/v1``, and the
+              account name (commonly a Keystone project UUID if
+              radosgw is configured with `Keystone integration
+              <../keystone>`_) will be inferred from request
+              headers.
+
+              If set to ``true``, the Swift API URL will be
+              ``http://host:port/<rgw_swift_url_prefix>/v1/AUTH_<account_name>``
+              (or
+              ``http://host:port/<rgw_swift_url_prefix>/v1/AUTH_<keystone_project_id>``)
+              instead, and the Keystone ``object-store`` endpoint must
+              accordingly be configured to include the
+              ``AUTH_%(tenant_id)s`` suffix.
+
+              You **must** set this option to ``true`` (and update the
+              Keystone service catalog) if you want radosgw to support
+              publicly-readable containers and `temporary URLs
+              <../swift/tempurl>`_.
+:Type: Boolean
+:Default: ``false``
+
+
 ``rgw swift versioning enabled``
 
 :Description: Enables the Object Versioning of OpenStack Object Storage API.
@@ -572,6 +618,21 @@ Swift Settings
               control verification - ACLs are NOT taken into consideration.
               Those containers cannot be versioned by the S3 object versioning
               mechanism.
+
+	      A slightly different attribute, ``X-History-Location``, which is also understood by
+              `OpenStack Swift <https://docs.openstack.org/swift/latest/api/object_versioning.html>`_
+              for handling ``DELETE`` operations, is currently not supported.
+:Type: Boolean
+:Default: ``false``
+
+
+``rgw trust forwarded https``
+
+:Description: When a proxy in front of radosgw is used for ssl termination, radosgw
+              does not know whether incoming http connections are secure. Enable
+              this option to trust the ``Forwarded`` and ``X-Forwarded-Proto`` headers
+              sent by the proxy when determining whether the connection is secure.
+              This is required for some features, such as server side encryption.
 :Type: Boolean
 :Default: ``false``
 
@@ -583,7 +644,7 @@ Logging Settings
 
 ``rgw log nonexistent bucket``
 
-:Description: Enables Ceph Object Gateway to log a request for a non-existent 
+:Description: Enables Ceph Object Gateway to log a request for a non-existent
               bucket.
 
 :Type: Boolean
@@ -592,7 +653,7 @@ Logging Settings
 
 ``rgw log object name``
 
-:Description: The logging format for an object name. See manpage 
+:Description: The logging format for an object name. See manpage
               :manpage:`date` for details about format specifiers.
 
 :Type: Date
@@ -601,7 +662,7 @@ Logging Settings
 
 ``rgw log object name utc``
 
-:Description: Whether a logged object name includes a UTC time. 
+:Description: Whether a logged object name includes a UTC time.
               If ``false``, it uses the local time.
 
 :Type: Boolean
@@ -617,7 +678,7 @@ Logging Settings
 
 ``rgw usage max user shards``
 
-:Description: The maximum number of shards used for a single user's 
+:Description: The maximum number of shards used for a single user's
               usage logging.
 
 :Type: Integer
@@ -640,7 +701,7 @@ Logging Settings
 
 ``rgw ops log rados``
 
-:Description: Whether the operations log should be written to the 
+:Description: Whether the operations log should be written to the
               Ceph Storage Cluster backend.
 
 :Type: Boolean
@@ -665,7 +726,7 @@ Logging Settings
 
 ``rgw usage log flush threshold``
 
-:Description: The number of dirty merged entries in the usage log before 
+:Description: The number of dirty merged entries in the usage log before
               flushing synchronously.
 
 :Type: Integer
@@ -692,7 +753,7 @@ Logging Settings
 
 ``rgw intent log object name``
 
-:Description: The logging format for the intent log object name. See manpage 
+:Description: The logging format for the intent log object name. See manpage
               :manpage:`date` for details about format specifiers.
 
 :Type: Date
@@ -701,7 +762,7 @@ Logging Settings
 
 ``rgw intent log object name utc``
 
-:Description: Whether the intent log object name includes a UTC time. 
+:Description: Whether the intent log object name includes a UTC time.
               If ``false``, it uses the local time.
 
 :Type: Boolean
@@ -752,11 +813,26 @@ Keystone Settings
               authentication with the admin credentials
               (``rgw keystone admin user``, ``rgw keystone admin password``,
               ``rgw keystone admin tenant``, ``rgw keystone admin project``,
-              ``rgw keystone admin domain``). Admin token feature is considered
-              as deprecated.
+              ``rgw keystone admin domain``). The Keystone admin token
+              has been deprecated, but can be used to integrate with
+              older environments.  Prefer ``rgw keystone admin token path``
+              to avoid exposing the token.
 :Type: String
 :Default: None
 
+``rgw keystone admin token path``
+
+:Description: Path to a file containing the Keystone admin token
+	      (shared secret).  In Ceph RadosGW authentication with
+	      the admin token has priority over authentication with
+	      the admin credentials
+              (``rgw keystone admin user``, ``rgw keystone admin password``,
+              ``rgw keystone admin tenant``, ``rgw keystone admin project``,
+              ``rgw keystone admin domain``).
+              The Keystone admin token has been deprecated, but can be
+              used to integrate with older environments.
+:Type: String
+:Default: None
 
 ``rgw keystone admin tenant``
 
@@ -777,7 +853,15 @@ Keystone Settings
 ``rgw keystone admin password``
 
 :Description: The password for OpenStack admin user when using OpenStack
-              Identity API v2
+              Identity API v2.  Prefer ``rgw keystone admin password path``
+              to avoid exposing the token.
+:Type: String
+:Default: None
+
+``rgw keystone admin password path``
+
+:Description: Path to a file containing the password for OpenStack
+              admin user when using OpenStack Identity API v2.
 :Type: String
 :Default: None
 
@@ -808,6 +892,19 @@ Keystone Settings
 :Description: Verify SSL certificates while making token requests to keystone.
 :Type: Boolean
 :Default: ``true``
+
+
+Server-side encryption Settings
+===============================
+
+``rgw crypt s3 kms backend``
+
+:Description: Where the SSE-KMS encryption keys are stored. Supported KMS
+              systems are OpenStack Barbican (``barbican``, the default) and
+              HashiCorp Vault (``vault``).
+:Type: String
+:Default: None
+
 
 Barbican Settings
 =================
@@ -851,6 +948,111 @@ Barbican Settings
               user when using OpenStack Identity API v3.
 :Type: String
 :Default: None
+
+
+HashiCorp Vault Settings
+========================
+
+``rgw crypt vault auth``
+
+:Description: Type of authentication method to be used. The only method
+              currently supported is ``token``.
+:Type: String
+:Default: ``token``
+
+``rgw crypt vault token file``
+
+:Description: If authentication method is ``token``, provide a path to the token
+              file, which should be readable only by Rados Gateway.
+:Type: String
+:Default: None
+
+``rgw crypt vault addr``
+
+:Description: Vault server base address, e.g. ``http://vaultserver:8200``.
+:Type: String
+:Default: None
+
+``rgw crypt vault prefix``
+
+:Description: The Vault secret URL prefix, which can be used to restrict access
+              to a particular subset of the secret space, e.g. ``/v1/secret/data``.
+:Type: String
+:Default: None
+
+``rgw crypt vault secret engine``
+
+:Description: Vault Secret Engine to be used to retrieve encryption keys: choose
+              between kv-v2, transit.
+:Type: String
+:Default: None
+
+``rgw crypt vault namespace``
+
+:Description: If set, Vault Namespace provides tenant isolation for teams and individuals
+              on the same Vault Enterprise instance, e.g. ``acme/tenant1``
+:Type: String
+:Default: None
+
+
+QoS settings
+------------
+
+.. versionadded:: Nautilus
+
+The ``civetweb`` frontend has a threading model that uses a thread per
+connection and hence automatically throttled by ``rgw thread pool size``
+configurable when it comes to accepting connections. The ``beast`` frontend is
+not restricted by the thread pool size when it comes to accepting new
+connections, so a scheduler abstraction is introduced in Nautilus release which
+for supporting ways for scheduling requests in the future.
+
+Currently the scheduler defaults to a throttler which throttles the active
+connections to a configured limit. QoS based on mClock is currently in an
+*experimental* phase and not recommended for production yet. Current
+implementation of *dmclock_client* op queue divides RGW Ops on admin, auth
+(swift auth, sts) metadata & data requests.
+
+
+``rgw max concurrent requests``
+
+:Description: Maximum number of concurrent HTTP requests that the beast frontend
+              will process. Tuning this can help to limit memory usage under
+              heavy load.
+:Type: Integer
+:Default: 1024
+
+
+``rgw scheduler type``
+
+:Description: The type of RGW Scheduler to use. Valid values are throttler,
+              dmclock. Currently defaults to throttler which throttles beast
+              frontend requests. dmclock is *experimental* and will need the
+              experimental flag set
+
+
+The options below are to tune the experimental dmclock scheduler. For some
+further reading on dmclock, see :ref:`dmclock-qos`. `op_class` for the flags below is
+one of admin, auth, metadata or data.
+
+``rgw_dmclock_<op_class>_res``
+
+:Description: The mclock reservation for `op_class` requests
+:Type: float
+:Default: 100.0
+
+``rgw_dmclock_<op_class>_wgt``
+
+:Description: The mclock weight for `op_class` requests
+:Type: float
+:Default: 1.0
+
+``rgw_dmclock_<op_class>_lim``
+
+:Description: The mclock limit for `op_class` requests
+:Type: float
+:Default: 0.0
+
 
 
 .. _Architecture: ../../architecture#data-striping

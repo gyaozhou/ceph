@@ -28,7 +28,8 @@ TEST_F(TestMockObjectMapInvalidateRequest, UpdatesInMemoryFlag) {
   librbd::ImageCtx *ictx;
   ASSERT_EQ(0, open_image(m_image_name, &ictx));
   bool flags_set;
-  ASSERT_EQ(0, ictx->test_flags(RBD_FLAG_OBJECT_MAP_INVALID, &flags_set));
+  ASSERT_EQ(0, ictx->test_flags(CEPH_NOSNAP,
+                                RBD_FLAG_OBJECT_MAP_INVALID, &flags_set));
   ASSERT_FALSE(flags_set);
 
   C_SaferCond cond_ctx;
@@ -39,13 +40,14 @@ TEST_F(TestMockObjectMapInvalidateRequest, UpdatesInMemoryFlag) {
                 .Times(0);
 
   {
-    RWLock::RLocker owner_locker(ictx->owner_lock);
-    RWLock::WLocker snap_locker(ictx->snap_lock);
+    std::shared_lock owner_locker{ictx->owner_lock};
+    std::unique_lock image_locker{ictx->image_lock};
     request->send();
   }
   ASSERT_EQ(0, cond_ctx.wait());
 
-  ASSERT_EQ(0, ictx->test_flags(RBD_FLAG_OBJECT_MAP_INVALID, &flags_set));
+  ASSERT_EQ(0, ictx->test_flags(CEPH_NOSNAP,
+                                RBD_FLAG_OBJECT_MAP_INVALID, &flags_set));
   ASSERT_TRUE(flags_set);
 }
 
@@ -64,8 +66,8 @@ TEST_F(TestMockObjectMapInvalidateRequest, UpdatesHeadOnDiskFlag) {
                 .WillOnce(DoDefault());
 
   {
-    RWLock::RLocker owner_locker(ictx->owner_lock);
-    RWLock::WLocker snap_locker(ictx->snap_lock);
+    std::shared_lock owner_locker{ictx->owner_lock};
+    std::unique_lock image_locker{ictx->image_lock};
     request->send();
   }
   ASSERT_EQ(0, cond_ctx.wait());
@@ -93,8 +95,8 @@ TEST_F(TestMockObjectMapInvalidateRequest, UpdatesSnapOnDiskFlag) {
                 .WillOnce(DoDefault());
 
   {
-    RWLock::RLocker owner_locker(ictx->owner_lock);
-    RWLock::WLocker snap_locker(ictx->snap_lock);
+    std::shared_lock owner_locker{ictx->owner_lock};
+    std::unique_lock image_locker{ictx->image_lock};
     request->send();
   }
   ASSERT_EQ(0, cond_ctx.wait());
@@ -114,8 +116,8 @@ TEST_F(TestMockObjectMapInvalidateRequest, SkipOnDiskUpdateWithoutLock) {
                 .Times(0);
 
   {
-    RWLock::RLocker owner_locker(ictx->owner_lock);
-    RWLock::WLocker snap_locker(ictx->snap_lock);
+    std::shared_lock owner_locker{ictx->owner_lock};
+    std::unique_lock image_locker{ictx->image_lock};
     request->send();
   }
   ASSERT_EQ(0, cond_ctx.wait());
@@ -138,8 +140,8 @@ TEST_F(TestMockObjectMapInvalidateRequest, IgnoresOnDiskUpdateFailure) {
                 .WillOnce(Return(-EINVAL));
 
   {
-    RWLock::RLocker owner_locker(ictx->owner_lock);
-    RWLock::WLocker snap_locker(ictx->snap_lock);
+    std::shared_lock owner_locker{ictx->owner_lock};
+    std::unique_lock image_locker{ictx->image_lock};
     request->send();
   }
   ASSERT_EQ(0, cond_ctx.wait());

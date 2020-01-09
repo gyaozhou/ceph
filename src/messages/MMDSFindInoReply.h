@@ -18,14 +18,20 @@
 #include "msg/Message.h"
 #include "include/filepath.h"
 
-struct MMDSFindInoReply : public Message {
+class MMDSFindInoReply : public SafeMessage {
+  static const int HEAD_VERSION = 1;
+  static const int COMPAT_VERSION = 1;
+public:
   ceph_tid_t tid = 0;
   filepath path;
 
-  MMDSFindInoReply() : Message(MSG_MDS_FINDINOREPLY) {}
-  MMDSFindInoReply(ceph_tid_t t) : Message(MSG_MDS_FINDINOREPLY), tid(t) {}
+protected:
+  MMDSFindInoReply() : SafeMessage{MSG_MDS_FINDINOREPLY, HEAD_VERSION, COMPAT_VERSION} {}
+  MMDSFindInoReply(ceph_tid_t t) : SafeMessage{MSG_MDS_FINDINOREPLY, HEAD_VERSION, COMPAT_VERSION}, tid(t) {}
+  ~MMDSFindInoReply() override {}
 
-  const char *get_type_name() const override { return "findinoreply"; }
+public:
+  std::string_view get_type_name() const override { return "findinoreply"; }
   void print(ostream &out) const override {
     out << "findinoreply(" << tid << " " << path << ")";
   }
@@ -40,6 +46,9 @@ struct MMDSFindInoReply : public Message {
     decode(tid, p);
     decode(path, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

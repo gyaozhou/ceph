@@ -52,7 +52,7 @@ or
         client_config = config['all']
     clients = ctx.cluster.only(teuthology.is_type('client'))
     rbd_test_dir = teuthology.get_testdir(ctx) + "/rbd_fio_test"
-    for remote,role in clients.remotes.iteritems():
+    for remote,role in clients.remotes.items():
         if 'client_config' in locals():
            with parallel() as p:
                p.spawn(run_fio, remote, client_config, rbd_test_dir)
@@ -127,7 +127,7 @@ def run_fio(remote, config, rbd_test_dir):
 
     formats=[1,2]
     features=[['layering'],['striping'],['exclusive-lock','object-map']]
-    fio_version='2.21'
+    fio_version='3.16'
     if config.get('formats'):
         formats=config['formats']
     if config.get('features'):
@@ -207,8 +207,8 @@ def run_fio(remote, config, rbd_test_dir):
         fio = "https://github.com/axboe/fio/archive/fio-" + fio_version + ".tar.gz"
         remote.run(args=['mkdir', run.Raw(rbd_test_dir),])
         remote.run(args=['cd' , run.Raw(rbd_test_dir),
-                         run.Raw(';'), 'wget' , fio , run.Raw(';'), run.Raw('tar -xvf fio*tar.gz'), run.Raw(';'),
-                         run.Raw('cd fio-fio*'), 'configure', run.Raw(';') ,'make'])
+                         run.Raw(';'), 'wget', fio, run.Raw(';'), run.Raw('tar -xvf fio*tar.gz'), run.Raw(';'),
+                         run.Raw('cd fio-fio*'), run.Raw(';'), './configure', run.Raw(';'), 'make'])
         remote.run(args=['ceph', '-s'])
         remote.run(args=[run.Raw('{tdir}/fio-fio-{v}/fio --showcmd {f}'.format(tdir=rbd_test_dir,v=fio_version,f=fio_config.name))])
         remote.run(args=['sudo', run.Raw('{tdir}/fio-fio-{v}/fio {f}'.format(tdir=rbd_test_dir,v=fio_version,f=fio_config.name))])

@@ -5,7 +5,6 @@ import * as _ from 'lodash';
 import { ExecutingTask } from '../models/executing-task';
 import { FinishedTask } from '../models/finished-task';
 import { Task } from '../models/task';
-import { ServicesModule } from './services.module';
 import { SummaryService } from './summary.service';
 
 class TaskSubscription {
@@ -21,13 +20,16 @@ class TaskSubscription {
 }
 
 @Injectable({
-  providedIn: ServicesModule
+  providedIn: 'root'
 })
 export class TaskManagerService {
   subscriptions: Array<TaskSubscription> = [];
 
   constructor(summaryService: SummaryService) {
-    summaryService.summaryData$.subscribe((data: any) => {
+    summaryService.subscribe((data: any) => {
+      if (!data) {
+        return;
+      }
       const executingTasks = data.executing_tasks;
       const finishedTasks = data.finished_tasks;
       const newSubscriptions: Array<TaskSubscription> = [];

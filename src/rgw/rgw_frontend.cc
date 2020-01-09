@@ -1,12 +1,12 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
 
 #include <signal.h>
 
 #include "rgw_frontend.h"
 #include "include/str_list.h"
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 
 #define dout_context g_ceph_context

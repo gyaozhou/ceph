@@ -14,10 +14,11 @@
 #ifndef CEPH_LIBRADOS_RADOSCLIENT_H
 #define CEPH_LIBRADOS_RADOSCLIENT_H
 
+#include "common/config_fwd.h"
 #include "common/Cond.h"
-#include "common/Mutex.h"
-#include "common/RWLock.h"
 #include "common/Timer.h"
+#include "common/ceph_mutex.h"
+#include "common/ceph_time.h"
 #include "include/rados/librados.h"
 #include "include/rados/librados.hpp"
 #include "mon/MonClient.h"
@@ -30,7 +31,6 @@ struct AuthAuthorizer;
 struct Context;
 class CephContext;
 struct Connection;
-struct md_config_t;
 class Message;
 class MLog;
 class Messenger;
@@ -44,7 +44,7 @@ class librados::RadosClient : public Dispatcher
 
 public:
   using Dispatcher::cct;
-  md_config_t *conf;
+  const ConfigProxy& conf;
 private:
   enum {
     DISCONNECTED,
@@ -63,7 +63,6 @@ private:
   bool _dispatch(Message *m);
   bool ms_dispatch(Message *m) override;
 
-  bool ms_get_authorizer(int dest_type, AuthAuthorizer **authorizer, bool force_new) override;
   void ms_handle_connect(Connection *con) override;
   bool ms_handle_reset(Connection *con) override;
   void ms_handle_remote_reset(Connection *con) override;
@@ -71,8 +70,8 @@ private:
 
   Objecter *objecter;
 
-  Mutex lock;
-  Cond cond;
+  ceph::mutex lock = ceph::make_mutex("librados::RadosClient::lock");
+  ceph::condition_variable cond;
   SafeTimer timer;
   int refcnt;
 
@@ -102,6 +101,7 @@ public:
 
   uint64_t get_instance_id();
 
+  int get_min_compatible_osd(int8_t* require_osd_release);
   int get_min_compatible_client(int8_t* min_compat_client,
                                 int8_t* require_min_compat_client);
 
@@ -116,11 +116,12 @@ public:
   int pool_requires_alignment2(int64_t pool_id, bool *requires);
   uint64_t pool_required_alignment(int64_t pool_id);
   int pool_required_alignment2(int64_t pool_id, uint64_t *alignment);
-  int pool_get_auid(uint64_t pool_id, unsigned long long *auid);
-  int pool_get_name(uint64_t pool_id, std::string *auid, bool wait_latest_map = false);
+  int pool_get_name(uint64_t pool_id, std::string *name,
+		    bool wait_latest_map = false);
 
   int pool_list(std::list<std::pair<int64_t, string> >& ls);
-  int get_pool_stats(std::list<string>& ls, map<string,::pool_stat_t>& result);
+  int get_pool_stats(std::list<string>& ls, map<string,::pool_stat_t> *result,
+    bool *per_pool);
   int get_fs_stats(ceph_statfs& result);
   bool get_pool_is_selfmanaged_snaps_mode(const std::string& pool);
 
@@ -130,8 +131,8 @@ public:
     b) the first ruleset in crush ruleset
     c) error out if no value find
   */
-  int pool_create(string& name, unsigned long long auid=0, int16_t crush_rule=-1);
-  int pool_create_async(string& name, PoolAsyncCompletionImpl *c, unsigned long long auid=0,
+  int pool_create(string& name, int16_t crush_rule=-1);
+  int pool_create_async(string& name, PoolAsyncCompletionImpl *c,
 			int16_t crush_rule=-1);
   int pool_get_base_tier(int64_t pool_id, int64_t* base_tier);
   int pool_delete(const char *name);
@@ -152,6 +153,10 @@ public:
 	          bufferlist *outbl, string *outs);
   int mgr_command(const vector<string>& cmd, const bufferlist &inbl,
 	          bufferlist *outbl, string *outs);
+  int mgr_command(
+    const string& name,
+    const vector<string>& cmd, const bufferlist &inbl,
+    bufferlist *outbl, string *outs);
   int osd_command(int osd, vector<string>& cmd, const bufferlist& inbl,
                   bufferlist *poutbl, string *prs);
   int pg_command(pg_t pgid, vector<string>& cmd, const bufferlist& inbl,
@@ -165,6 +170,8 @@ public:
   bool put();
   void blacklist_self(bool set);
 
+  std::string get_addrs() const;
+
   int service_daemon_register(
     const std::string& service,  ///< service name (e.g., 'rgw')
     const std::string& name,     ///< daemon name (e.g., 'gwfoo')
@@ -173,6 +180,8 @@ public:
     std::map<std::string,std::string>&& status);
 
   mon_feature_t get_required_monitor_features() const;
+
+  int get_inconsistent_pgs(int64_t pool_id, std::vector<std::string>* pgs);
 };
 
 #endif

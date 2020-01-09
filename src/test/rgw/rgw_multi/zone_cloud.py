@@ -16,7 +16,7 @@ try:
 except ImportError:
     from itertools import zip_longest
 
-from urlparse import urlparse
+from six.moves.urllib.parse import urlparse
 
 from .multisite import *
 from .tools import *
@@ -116,7 +116,7 @@ class CloudKey:
             self.etag = '"' + self.etag + '"'
 
         new_meta = {}
-        for meta_key, meta_val in k.metadata.iteritems():
+        for meta_key, meta_val in k.metadata.items():
             if not meta_key.startswith('rgwx-'):
                 new_meta[meta_key] = meta_val
 

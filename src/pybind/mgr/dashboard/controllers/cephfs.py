@@ -3,12 +3,16 @@ from __future__ import absolute_import
 
 from collections import defaultdict
 
-import cherrypy
+import os
 
-from . import ApiController, RESTController
+import cherrypy
+import cephfs
+
+from . import ApiController, RESTController, UiApiController
 from .. import mgr
 from ..exceptions import DashboardException
 from ..security import Scope
+from ..services.cephfs import CephFS as CephFS_
 from ..services.ceph_service import CephService
 from ..tools import ViewCache
 
@@ -28,7 +32,6 @@ class CephFS(RESTController):
 
     def get(self, fs_id):
         fs_id = self.fs_id_to_int(fs_id)
-
         return self.fs_status(fs_id)
 
     @RESTController.Resource('GET')
@@ -37,30 +40,39 @@ class CephFS(RESTController):
 
         return self._clients(fs_id)
 
+    @RESTController.Resource('DELETE', path='/client/{client_id}')
+    def evict(self, fs_id, client_id):
+        fs_id = self.fs_id_to_int(fs_id)
+        client_id = self.client_id_to_int(client_id)
+
+        return self._evict(fs_id, client_id)
+
     @RESTController.Resource('GET')
-    def mds_counters(self, fs_id):
+    def mds_counters(self, fs_id, counters=None):
+        fs_id = self.fs_id_to_int(fs_id)
+        return self._mds_counters(fs_id, counters)
+
+    def _mds_counters(self, fs_id, counters=None):
         """
         Result format: map of daemon name to map of counter to list of datapoints
         rtype: dict[str, dict[str, list]]
         """
 
-        # Opinionated list of interesting performance counters for the GUI --
-        # if you need something else just add it.  See how simple life is
-        # when you don't have to write general purpose APIs?
-        counters = [
-            "mds_server.handle_client_request",
-            "mds_log.ev",
-            "mds_cache.num_strays",
-            "mds.exported",
-            "mds.exported_inodes",
-            "mds.imported",
-            "mds.imported_inodes",
-            "mds.inodes",
-            "mds.caps",
-            "mds.subtrees"
-        ]
-
-        fs_id = self.fs_id_to_int(fs_id)
+        if counters is None:
+            # Opinionated list of interesting performance counters for the GUI
+            counters = [
+                "mds_server.handle_client_request",
+                "mds_log.ev",
+                "mds_cache.num_strays",
+                "mds.exported",
+                "mds.exported_inodes",
+                "mds.imported",
+                "mds.imported_inodes",
+                "mds.inodes",
+                "mds.caps",
+                "mds.subtrees",
+                "mds_mem.ino"
+            ]
 
         result = {}
         mds_names = self._get_mds_names(fs_id)
@@ -85,6 +97,15 @@ class CephFS(RESTController):
                                      msg="Invalid cephfs ID {}".format(fs_id),
                                      component='cephfs')
 
+    @staticmethod
+    def client_id_to_int(client_id):
+        try:
+            return int(client_id)
+        except ValueError:
+            raise DashboardException(code='invalid_cephfs_client_id',
+                                     msg="Invalid cephfs client ID {}".format(client_id),
+                                     component='cephfs')
+
     def _get_mds_names(self, filesystem_id=None):
         names = []
 
@@ -99,6 +120,12 @@ class CephFS(RESTController):
             names.extend(info['name'] for info in fsmap['standbys'])
 
         return names
+
+    def _append_mds_metadata(self, mds_versions, metadata_key):
+        metadata = mgr.get_metadata('mds', metadata_key)
+        if metadata is None:
+            return
+        mds_versions[metadata.get('ceph_version', 'unknown')].append(metadata_key)
 
     # pylint: disable=too-many-statements,too-many-branches
     def fs_status(self, fs_id):
@@ -126,7 +153,7 @@ class CephFS(RESTController):
             if up:
                 gid = mdsmap['up']["mds_{0}".format(rank)]
                 info = mdsmap['info']['gid_{0}'.format(gid)]
-                dns = mgr.get_latest("mds", info['name'], "mds.inodes")
+                dns = mgr.get_latest("mds", info['name'], "mds_mem.dn")
                 inos = mgr.get_latest("mds", info['name'], "mds_mem.ino")
 
                 if rank == 0:
@@ -154,9 +181,7 @@ class CephFS(RESTController):
                 else:
                     activity = 0.0
 
-                metadata = mgr.get_metadata('mds', info['name'])
-                mds_versions[metadata.get('ceph_version', 'unknown')].append(
-                    info['name'])
+                self._append_mds_metadata(mds_versions, info['name'])
                 rank_table.append(
                     {
                         "rank": rank,
@@ -187,7 +212,7 @@ class CephFS(RESTController):
                 continue
 
             inos = mgr.get_latest("mds", daemon_info['name'], "mds_mem.ino")
-            dns = mgr.get_latest("mds", daemon_info['name'], "mds.inodes")
+            dns = mgr.get_latest("mds", daemon_info['name'], "mds_mem.dn")
 
             activity = CephService.get_rate(
                 "mds", daemon_info['name'], "mds_log.replay")
@@ -204,9 +229,9 @@ class CephFS(RESTController):
             )
 
         df = mgr.get("df")
-        pool_stats = dict([(p['id'], p['stats']) for p in df['pools']])
+        pool_stats = {p['id']: p['stats'] for p in df['pools']}
         osdmap = mgr.get("osd_map")
-        pools = dict([(p['pool'], p) for p in osdmap['pools']])
+        pools = {p['pool']: p for p in osdmap['pools']}
         metadata_pool_id = mdsmap['metadata_pool']
         data_pool_ids = mdsmap['data_pools']
 
@@ -223,10 +248,7 @@ class CephFS(RESTController):
 
         standby_table = []
         for standby in fsmap['standbys']:
-            metadata = mgr.get_metadata('mds', standby['name'])
-            mds_versions[metadata.get('ceph_version', 'unknown')].append(
-                standby['name'])
-
+            self._append_mds_metadata(mds_versions, standby['name'])
             standby_table.append({
                 'name': standby['name']
             })
@@ -281,6 +303,128 @@ class CephFS(RESTController):
             'data': clients
         }
 
+    def _evict(self, fs_id, client_id):
+        clients = self._clients(fs_id)
+        if not [c for c in clients['data'] if c['id'] == client_id]:
+            raise cherrypy.HTTPError(404,
+                                     "Client {0} does not exist in cephfs {1}".format(client_id,
+                                                                                      fs_id))
+        CephService.send_command('mds', 'client evict',
+                                 srv_spec='{0}:0'.format(fs_id), id=client_id)
+
+    @staticmethod
+    def _cephfs_instance(fs_id):
+        """
+        :param fs_id: The filesystem identifier.
+        :type fs_id: int | str
+        :return: A instance of the CephFS class.
+        """
+        fs_name = CephFS_.fs_name_from_id(fs_id)
+        if fs_name is None:
+            raise cherrypy.HTTPError(404, "CephFS id {} not found".format(fs_id))
+        return CephFS_(fs_name)
+
+    @RESTController.Resource('GET')
+    def ls_dir(self, fs_id, path=None, depth=1):
+        """
+        List directories of specified path.
+        :param fs_id: The filesystem identifier.
+        :param path: The path where to start listing the directory content.
+          Defaults to '/' if not set.
+        :return: The names of the directories below the specified path.
+        :rtype: list
+        """
+        if path is None:
+            path = os.sep
+        else:
+            path = os.path.normpath(path)
+        try:
+            cfs = self._cephfs_instance(fs_id)
+            paths = cfs.ls_dir(path, int(depth))
+            # Convert (bytes => string), prettify paths (strip slashes)
+            # and append additional information.
+            paths = [{
+                'name': os.path.basename(p.decode()),
+                'path': p.decode(),
+                'parent': os.path.dirname(p.decode()),
+                'snapshots': cfs.ls_snapshots(p.decode()),
+                'quotas': cfs.get_quotas(p.decode())
+            } for p in paths if p != path.encode()]
+        except (cephfs.PermissionError, cephfs.ObjectNotFound):
+            paths = []
+        return paths
+
+    @RESTController.Resource('POST')
+    def mk_dirs(self, fs_id, path):
+        """
+        Create a directory.
+        :param fs_id: The filesystem identifier.
+        :param path: The path of the directory.
+        """
+        cfs = self._cephfs_instance(fs_id)
+        cfs.mk_dirs(path)
+
+    @RESTController.Resource('POST')
+    def rm_dir(self, fs_id, path):
+        """
+        Remove a directory.
+        :param fs_id: The filesystem identifier.
+        :param path: The path of the directory.
+        """
+        cfs = self._cephfs_instance(fs_id)
+        cfs.rm_dir(path)
+
+    @RESTController.Resource('POST')
+    def mk_snapshot(self, fs_id, path, name=None):
+        """
+        Create a snapshot.
+        :param fs_id: The filesystem identifier.
+        :param path: The path of the directory.
+        :param name: The name of the snapshot. If not specified,
+            a name using the current time in RFC3339 UTC format
+            will be generated.
+        :return: The name of the snapshot.
+        :rtype: str
+        """
+        cfs = self._cephfs_instance(fs_id)
+        return cfs.mk_snapshot(path, name)
+
+    @RESTController.Resource('POST')
+    def rm_snapshot(self, fs_id, path, name):
+        """
+        Remove a snapshot.
+        :param fs_id: The filesystem identifier.
+        :param path: The path of the directory.
+        :param name: The name of the snapshot.
+        """
+        cfs = self._cephfs_instance(fs_id)
+        cfs.rm_snapshot(path, name)
+
+    @RESTController.Resource('GET')
+    def get_quotas(self, fs_id, path):
+        """
+        Get the quotas of the specified path.
+        :param fs_id: The filesystem identifier.
+        :param path: The path of the directory/file.
+        :return: Returns a dictionary containing 'max_bytes'
+            and 'max_files'.
+        :rtype: dict
+        """
+        cfs = self._cephfs_instance(fs_id)
+        return cfs.get_quotas(path)
+
+    @RESTController.Resource('POST')
+    def set_quotas(self, fs_id, path, max_bytes=None, max_files=None):
+        """
+        Set the quotas of the specified path.
+        :param fs_id: The filesystem identifier.
+        :param path: The path of the directory/file.
+        :param max_bytes: The byte limit.
+        :param max_files: The file limit.
+        """
+        cfs = self._cephfs_instance(fs_id)
+        return cfs.set_quotas(path, max_bytes, max_files)
+
 
 class CephFSClients(object):
     def __init__(self, module_inst, fscid):
@@ -290,3 +434,31 @@ class CephFSClients(object):
     @ViewCache()
     def get(self):
         return CephService.send_command('mds', 'session ls', srv_spec='{0}:0'.format(self.fscid))
+
+
+@UiApiController('/cephfs', Scope.CEPHFS)
+class CephFsUi(CephFS):
+    RESOURCE_ID = 'fs_id'
+
+    @RESTController.Resource('GET')
+    def tabs(self, fs_id):
+        data = {}
+        fs_id = self.fs_id_to_int(fs_id)
+
+        # Needed for detail tab
+        fs_status = self.fs_status(fs_id)
+        for pool in fs_status['cephfs']['pools']:
+            pool['size'] = pool['used'] + pool['avail']
+        data['pools'] = fs_status['cephfs']['pools']
+        data['ranks'] = fs_status['cephfs']['ranks']
+        data['name'] = fs_status['cephfs']['name']
+        data['standbys'] = ', '.join([x['name'] for x in fs_status['standbys']])
+        counters = self._mds_counters(fs_id)
+        for k, v in counters.items():
+            v['name'] = k
+        data['mds_counters'] = counters
+
+        # Needed for client tab
+        data['clients'] = self._clients(fs_id)
+
+        return data

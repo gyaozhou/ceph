@@ -5,10 +5,11 @@
 
 #include "msg/Message.h"
 
-class MMgrClose : public Message
-{
-  static const int HEAD_VERSION = 1;
-  static const int COMPAT_VERSION = 1;
+class MMgrClose : public Message {
+private:
+
+  static constexpr int HEAD_VERSION = 1;
+  static constexpr int COMPAT_VERSION = 1;
 
 public:
   std::string daemon_name;
@@ -16,6 +17,7 @@ public:
 
   void decode_payload() override
   {
+    using ceph::decode;
     auto p = payload.cbegin();
     decode(daemon_name, p);
     decode(service_name, p);
@@ -27,8 +29,8 @@ public:
     encode(service_name, payload);
   }
 
-  const char *get_type_name() const override { return "mgrclose"; }
-  void print(ostream& out) const override {
+  std::string_view get_type_name() const override { return "mgrclose"; }
+  void print(std::ostream& out) const override {
     out << get_type_name() << "(";
     if (service_name.length()) {
       out << service_name;
@@ -40,6 +42,10 @@ public:
   }
 
   MMgrClose()
-    : Message(MSG_MGR_CLOSE, HEAD_VERSION, COMPAT_VERSION)
+    : Message{MSG_MGR_CLOSE, HEAD_VERSION, COMPAT_VERSION}
   {}
+
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };

@@ -1,18 +1,19 @@
 CephFS Snapshots
 ================
 
-CephFS supports snapshots, generally created by invoking mkdir against the
-(hidden, special) .snap directory.
+CephFS supports snapshots, generally created by invoking mkdir within the
+``.snap`` directory. Note this is a hidden, special directory, not visible
+during a directory listing.
 
 Overview
 -----------
 
 Generally, snapshots do what they sound like: they create an immutable view
-of the filesystem at the point in time they're taken. There are some headline
+of the file system at the point in time they're taken. There are some headline
 features that make CephFS snapshots different from what you might expect:
 
 * Arbitrary subtrees. Snapshots are created within any directory you choose,
-  and cover all data in the filesystem under that directory.
+  and cover all data in the file system under that directory.
 * Asynchronous. If you create a snapshot, buffered data is flushed out lazily,
   including from other clients. As a result, "creating" the snapshot is
   very fast.
@@ -29,7 +30,7 @@ Important Data Structures
   directory and contains sequence counters, timestamps, the list of associated
   snapshot IDs, and `past_parent_snaps`.
 * SnapServer: SnapServer manages snapshot ID allocation, snapshot deletion and
-  tracks list of effective snapshots in the filesystem. A filesystem only has
+  tracks list of effective snapshots in the file system. A file system only has
   one instance of snapserver.
 * SnapClient: SnapClient is used to communicate with snapserver, each MDS rank
   has its own snapclient instance. SnapClient also caches effective snapshots
@@ -37,16 +38,22 @@ Important Data Structures
 
 Creating a snapshot
 -------------------
-CephFS snapshot feature is enabled by default on new filesystem. To enable it
-on existing filesystems, use command below.
+CephFS snapshot feature is enabled by default on new file system. To enable it
+on existing file systems, use command below.
 
 .. code::
 
        $ ceph fs set <fs_name> allow_new_snaps true
 
+When snapshots are enabled, all directories in CephFS will have a special
+``.snap`` directory. (You may configure a different name with the ``client
+snapdir`` setting if you wish.)
 
-To make a snapshot on directory "/1/2/3/", the client invokes "mkdir" on
-"/1/2/3/.snap" directory. This is transmitted to the MDS Server as a
+To create a CephFS snapshot, create a subdirectory under
+``.snap`` with a name of your choice. For example, to create a snapshot on
+directory "/1/2/3/", invoke ``mkdir /1/2/3/.snap/my-snapshot-name`` .
+
+This is transmitted to the MDS Server as a
 CEPH_MDS_OP_MKSNAP-tagged `MClientRequest`, and initially handled in
 Server::handle_client_mksnap(). It allocates a `snapid` from the `SnapServer`,
 projects a new inode with the new SnapRealm, and commits it to the MDLog as
@@ -71,7 +78,7 @@ Generating a SnapContext
 ------------------------
 A RADOS `SnapContext` consists of a snapshot sequence ID (`snapid`) and all
 the snapshot IDs that an object is already part of. To generate that list, we
-combine `snapids` associated with the SnapRealm and all vaild `snapids` in
+combine `snapids` associated with the SnapRealm and all valid `snapids` in
 `past_parent_snaps`. Stale `snapids` are filtered out by SnapClient's cached
 effective snapshots.
 
@@ -111,15 +118,15 @@ out again.
 
 Hard links
 ----------
-Inode with multiple hard links is moved to a dummy gloabl SnapRealm. The
-dummy SnapRealm covers all snapshots in the filesystem. The inode's data
+Inode with multiple hard links is moved to a dummy global SnapRealm. The
+dummy SnapRealm covers all snapshots in the file system. The inode's data
 will be preserved for any new snapshot. These preserved data will cover
 snapshots on any linkage of the inode.
 
 Multi-FS
 ---------
-Snapshots and multiiple filesystems don't interact well. Specifically, each
-MDS cluster allocates `snapids` independently; if you have multiple filesystems
+Snapshots and multiple file systems don't interact well. Specifically, each
+MDS cluster allocates `snapids` independently; if you have multiple file systems
 sharing a single pool (via namespaces), their snapshots *will* collide and
 deleting one will result in missing file data for others. (This may even be
 invisible, not throwing errors to the user.) If each FS gets its own

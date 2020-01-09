@@ -12,6 +12,7 @@
  *
  */
 #include "lockdep.h"
+#include "common/ceph_context.h"
 #include "common/dout.h"
 #include "common/valgrind.h"
 
@@ -64,6 +65,7 @@ void lockdep_register_ceph_context(CephContext *cct)
     lockdep_dout(1) << "lockdep start" << dendl;
     if (!free_ids_inited) {
       free_ids_inited = true;
+      // FIPS zeroization audit 20191115: this memset is not security related.
       memset((void*) &free_ids[0], 255, sizeof(free_ids));
     }
   }
@@ -89,6 +91,7 @@ void lockdep_unregister_ceph_context(CephContext *cct)
     held.clear();
     lock_names.clear();
     lock_ids.clear();
+    // FIPS zeroization audit 20191115: these memsets are not security related.
     memset((void*)&follows[0][0], 0, current_maxid * MAX_LOCKS/8);
     memset((void*)&follows_bt[0][0], 0, sizeof(BackTrace*) * current_maxid * MAX_LOCKS);
   }
@@ -212,6 +215,7 @@ void lockdep_unregister(int id)
   if (--refs == 0) {
     if (p != lock_names.end()) {
       // reset dependency ordering
+      // FIPS zeroization audit 20191115: this memset is not security related.
       memset((void*)&follows[id][0], 0, MAX_LOCKS/8);
       for (unsigned i=0; i<current_maxid; ++i) {
         delete follows_bt[id][i];
@@ -268,7 +272,8 @@ static bool does_follow(int a, int b)
   return false;
 }
 
-int lockdep_will_lock(const char *name, int id, bool force_backtrace)
+int lockdep_will_lock(const char *name, int id, bool force_backtrace,
+		      bool recursive)
 {
   pthread_t p = pthread_self();
 
@@ -289,17 +294,19 @@ int lockdep_will_lock(const char *name, int id, bool force_backtrace)
        p != m.end();
        ++p) {
     if (p->first == id) {
-      lockdep_dout(0) << "\n";
-      *_dout << "recursive lock of " << name << " (" << id << ")\n";
-      BackTrace *bt = new BackTrace(BACKTRACE_SKIP);
-      bt->print(*_dout);
-      if (p->second) {
-	*_dout << "\npreviously locked at\n";
-	p->second->print(*_dout);
+      if (!recursive) {
+	lockdep_dout(0) << "\n";
+	*_dout << "recursive lock of " << name << " (" << id << ")\n";
+	BackTrace *bt = new BackTrace(BACKTRACE_SKIP);
+	bt->print(*_dout);
+	if (p->second) {
+	  *_dout << "\npreviously locked at\n";
+	  p->second->print(*_dout);
+	}
+	delete bt;
+	*_dout << dendl;
+	ceph_abort();
       }
-      delete bt;
-      *_dout << dendl;
-      ceph_abort();
     }
     else if (!(follows[p->first][id/8] & (1 << (id % 8)))) {
       // new dependency
@@ -373,7 +380,7 @@ int lockdep_will_unlock(const char *name, int id)
 
   if (id < 0) {
     //id = lockdep_register(name);
-    assert(id == -1);
+    ceph_assert(id == -1);
     return id;
   }
 

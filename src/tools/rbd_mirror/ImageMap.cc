@@ -58,14 +58,15 @@ ImageMap<I>::ImageMap(librados::IoCtx &ioctx, Threads<I> *threads,
                       image_map::Listener &listener)
   : m_ioctx(ioctx), m_threads(threads), m_instance_id(instance_id),
     m_listener(listener),
-    m_lock(unique_lock_name("rbd::mirror::ImageMap::m_lock", this)) {
+    m_lock(ceph::make_mutex(
+      unique_lock_name("rbd::mirror::ImageMap::m_lock", this))) {
 }
 
 template <typename I>
 ImageMap<I>::~ImageMap() {
-  assert(m_async_op_tracker.empty());
-  assert(m_timer_task == nullptr);
-  assert(m_rebalance_task == nullptr);
+  ceph_assert(m_async_op_tracker.empty());
+  ceph_assert(m_timer_task == nullptr);
+  ceph_assert(m_rebalance_task == nullptr);
 }
 
 template <typename I>
@@ -74,7 +75,7 @@ void ImageMap<I>::continue_action(const std::set<std::string> &global_image_ids,
   dout(20) << dendl;
 
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     if (m_shutting_down) {
       return;
     }
@@ -117,7 +118,7 @@ void ImageMap<I>::update_image_mapping(Updates&& map_updates,
   dout(5) << "updates=[" << map_updates << "], "
           << "removes=[" << map_removals << "]" << dendl;
 
-  Context *on_finish = new FunctionContext(
+  Context *on_finish = new LambdaContext(
     [this, map_updates, map_removals](int r) {
       handle_update_request(map_updates, map_removals, r);
       finish_async_op();
@@ -148,8 +149,8 @@ template <typename I>
 void ImageMap<I>::process_updates() {
   dout(20) << dendl;
 
-  assert(m_threads->timer_lock.is_locked());
-  assert(m_timer_task == nullptr);
+  ceph_assert(ceph_mutex_is_locked(m_threads->timer_lock));
+  ceph_assert(m_timer_task == nullptr);
 
   Updates map_updates;
   std::set<std::string> map_removals;
@@ -157,7 +158,7 @@ void ImageMap<I>::process_updates() {
   Updates release_updates;
 
   // gather updates by advancing the state machine
-  m_lock.Lock();
+  m_lock.lock();
   for (auto const &global_image_id : m_global_image_ids) {
     image_map::ActionType action_type =
       m_policy->start_action(global_image_id);
@@ -170,7 +171,7 @@ void ImageMap<I>::process_updates() {
     case image_map::ACTION_TYPE_NONE:
       continue;
     case image_map::ACTION_TYPE_MAP_UPDATE:
-      assert(info.instance_id != image_map::UNMAPPED_INSTANCE_ID);
+      ceph_assert(info.instance_id != image_map::UNMAPPED_INSTANCE_ID);
       map_updates.emplace_back(global_image_id, info.instance_id,
                                info.mapped_time);
       break;
@@ -178,17 +179,17 @@ void ImageMap<I>::process_updates() {
       map_removals.emplace(global_image_id);
       break;
     case image_map::ACTION_TYPE_ACQUIRE:
-      assert(info.instance_id != image_map::UNMAPPED_INSTANCE_ID);
+      ceph_assert(info.instance_id != image_map::UNMAPPED_INSTANCE_ID);
       acquire_updates.emplace_back(global_image_id, info.instance_id);
       break;
     case image_map::ACTION_TYPE_RELEASE:
-      assert(info.instance_id != image_map::UNMAPPED_INSTANCE_ID);
+      ceph_assert(info.instance_id != image_map::UNMAPPED_INSTANCE_ID);
       release_updates.emplace_back(global_image_id, info.instance_id);
       break;
     }
   }
   m_global_image_ids.clear();
-  m_lock.Unlock();
+  m_lock.unlock();
 
   // notify listener (acquire, release) and update on-disk map. note
   // that its safe to process this outside m_lock as we still hold
@@ -199,13 +200,13 @@ void ImageMap<I>::process_updates() {
 
 template <typename I>
 void ImageMap<I>::schedule_update_task() {
-  Mutex::Locker timer_lock(m_threads->timer_lock);
+  std::lock_guard timer_lock{m_threads->timer_lock};
   schedule_update_task(m_threads->timer_lock);
 }
 
 template <typename I>
-void ImageMap<I>::schedule_update_task(const Mutex &timer_lock) {
-  assert(m_threads->timer_lock.is_locked());
+void ImageMap<I>::schedule_update_task(const ceph::mutex &timer_lock) {
+  ceph_assert(ceph_mutex_is_locked(m_threads->timer_lock));
 
   schedule_rebalance_task();
 
@@ -214,21 +215,21 @@ void ImageMap<I>::schedule_update_task(const Mutex &timer_lock) {
   }
 
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     if (m_global_image_ids.empty()) {
       return;
     }
   }
 
-  m_timer_task = new FunctionContext([this](int r) {
-      assert(m_threads->timer_lock.is_locked());
+  m_timer_task = new LambdaContext([this](int r) {
+      ceph_assert(ceph_mutex_is_locked(m_threads->timer_lock));
       m_timer_task = nullptr;
 
       process_updates();
     });
 
   CephContext *cct = reinterpret_cast<CephContext *>(m_ioctx.cct());
-  double after = cct->_conf->get_val<double>("rbd_mirror_image_policy_update_throttle_interval");
+  double after = cct->_conf.get_val<double>("rbd_mirror_image_policy_update_throttle_interval");
 
   dout(20) << "scheduling image check update (" << m_timer_task << ")"
            << " after " << after << " second(s)" << dendl;
@@ -237,10 +238,10 @@ void ImageMap<I>::schedule_update_task(const Mutex &timer_lock) {
 
 template <typename I>
 void ImageMap<I>::rebalance() {
-  assert(m_rebalance_task == nullptr);
+  ceph_assert(m_rebalance_task == nullptr);
 
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     if (m_async_op_tracker.empty() && m_global_image_ids.empty()){
       dout(20) << "starting rebalance" << dendl;
 
@@ -258,12 +259,12 @@ void ImageMap<I>::rebalance() {
 
 template <typename I>
 void ImageMap<I>::schedule_rebalance_task() {
-  assert(m_threads->timer_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_threads->timer_lock));
 
   CephContext *cct = reinterpret_cast<CephContext *>(m_ioctx.cct());
 
   // fetch the updated value of idle timeout for (re)scheduling
-  double resched_after = cct->_conf->get_val<double>(
+  double resched_after = cct->_conf.get_val<double>(
     "rbd_mirror_image_policy_rebalance_timeout");
   if (!resched_after) {
     return;
@@ -274,8 +275,8 @@ void ImageMap<I>::schedule_rebalance_task() {
     m_threads->timer->cancel_event(m_rebalance_task);
   }
 
-  m_rebalance_task = new FunctionContext([this](int _) {
-      assert(m_threads->timer_lock.is_locked());
+  m_rebalance_task = new LambdaContext([this](int _) {
+      ceph_assert(ceph_mutex_is_locked(m_threads->timer_lock));
       m_rebalance_task = nullptr;
 
       rebalance();
@@ -289,7 +290,7 @@ void ImageMap<I>::schedule_rebalance_task() {
 template <typename I>
 void ImageMap<I>::schedule_action(const std::string &global_image_id) {
   dout(20) << "global_image_id=" << global_image_id << dendl;
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   m_global_image_ids.emplace(global_image_id);
 }
@@ -342,7 +343,7 @@ void ImageMap<I>::handle_load(const std::map<std::string,
   dout(20) << dendl;
 
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     m_policy->init(image_mapping);
 
     for (auto& pair : image_mapping) {
@@ -355,7 +356,7 @@ void ImageMap<I>::handle_load(const std::map<std::string,
 template <typename I>
 void ImageMap<I>::handle_peer_ack_remove(const std::string &global_image_id,
                                          int r) {
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
   dout(5) << "global_image_id=" << global_image_id << dendl;
 
   if (r < 0) {
@@ -376,7 +377,7 @@ void ImageMap<I>::update_images_added(
     const std::set<std::string> &global_image_ids) {
   dout(5) << "peer_uuid=" << peer_uuid << ", "
           << "global_image_ids=[" << global_image_ids << "]" << dendl;
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   for (auto const &global_image_id : global_image_ids) {
     auto result = m_peer_map[global_image_id].insert(peer_uuid);
@@ -394,7 +395,7 @@ void ImageMap<I>::update_images_removed(
     const std::set<std::string> &global_image_ids) {
   dout(5) << "peer_uuid=" << peer_uuid << ", "
           << "global_image_ids=[" << global_image_ids << "]" << dendl;
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Updates to_remove;
   for (auto const &global_image_id : global_image_ids) {
@@ -434,7 +435,7 @@ template <typename I>
 void ImageMap<I>::update_instances_added(
     const std::vector<std::string> &instance_ids) {
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     if (m_shutting_down) {
       return;
     }
@@ -462,7 +463,7 @@ template <typename I>
 void ImageMap<I>::update_instances_removed(
     const std::vector<std::string> &instance_ids) {
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     if (m_shutting_down) {
       return;
     }
@@ -495,7 +496,7 @@ void ImageMap<I>::update_images(const std::string &peer_uuid,
           << removed_global_image_ids.size() << dendl;
 
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     if (m_shutting_down) {
       return;
     }
@@ -524,12 +525,12 @@ void ImageMap<I>::init(Context *on_finish) {
   dout(20) << dendl;
 
   CephContext *cct = reinterpret_cast<CephContext *>(m_ioctx.cct());
-  std::string policy_type = cct->_conf->get_val<string>("rbd_mirror_image_policy_type");
+  std::string policy_type = cct->_conf.get_val<string>("rbd_mirror_image_policy_type");
 
   if (policy_type == "none" || policy_type == "simple") {
     m_policy.reset(image_map::SimplePolicy::create(m_ioctx));
   } else {
-    assert(false); // not really needed as such, but catch it.
+    ceph_abort(); // not really needed as such, but catch it.
   }
 
   dout(20) << "mapping policy=" << policy_type << dendl;
@@ -546,11 +547,11 @@ void ImageMap<I>::shut_down(Context *on_finish) {
   dout(20) << dendl;
 
   {
-    Mutex::Locker timer_lock(m_threads->timer_lock);
+    std::lock_guard timer_lock{m_threads->timer_lock};
 
     {
-      Mutex::Locker locker(m_lock);
-      assert(!m_shutting_down);
+      std::lock_guard locker{m_lock};
+      ceph_assert(!m_shutting_down);
 
       m_shutting_down = true;
       m_policy.reset();
@@ -574,7 +575,7 @@ void ImageMap<I>::filter_instance_ids(
     const std::vector<std::string> &instance_ids,
     std::vector<std::string> *filtered_instance_ids, bool removal) const {
   CephContext *cct = reinterpret_cast<CephContext *>(m_ioctx.cct());
-  std::string policy_type = cct->_conf->get_val<string>("rbd_mirror_image_policy_type");
+  std::string policy_type = cct->_conf.get_val<string>("rbd_mirror_image_policy_type");
 
   if (policy_type != "none") {
     *filtered_instance_ids = instance_ids;

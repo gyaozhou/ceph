@@ -1,9 +1,13 @@
 import { Component, EventEmitter, Output } from '@angular/core';
-import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { Validators } from '@angular/forms';
 
 import * as _ from 'lodash';
-import { BsModalRef } from 'ngx-bootstrap/modal/bs-modal-ref.service';
+import { BsModalRef } from 'ngx-bootstrap/modal';
 
+import { I18n } from '@ngx-translate/i18n-polyfill';
+import { ActionLabelsI18n } from '../../../shared/constants/app.constants';
+import { CdFormBuilder } from '../../../shared/forms/cd-form-builder';
+import { CdFormGroup } from '../../../shared/forms/cd-form-group';
 import { RgwUserCapability } from '../models/rgw-user-capability';
 
 @Component({
@@ -16,13 +20,22 @@ export class RgwUserCapabilityModalComponent {
    * The event that is triggered when the 'Add' or 'Update' button
    * has been pressed.
    */
-  @Output() submitAction = new EventEmitter();
+  @Output()
+  submitAction = new EventEmitter();
 
-  formGroup: FormGroup;
+  formGroup: CdFormGroup;
   editing = true;
   types: string[] = [];
+  resource: string;
+  action: string;
 
-  constructor(private formBuilder: FormBuilder, public bsModalRef: BsModalRef) {
+  constructor(
+    private formBuilder: CdFormBuilder,
+    public bsModalRef: BsModalRef,
+    private i18n: I18n,
+    public actionLabels: ActionLabelsI18n
+  ) {
+    this.resource = this.i18n('capability');
     this.createForm();
   }
 
@@ -41,6 +54,7 @@ export class RgwUserCapabilityModalComponent {
    */
   setEditing(editing: boolean = true) {
     this.editing = editing;
+    this.action = this.editing ? this.actionLabels.EDIT : this.actionLabels.ADD;
   }
 
   /**

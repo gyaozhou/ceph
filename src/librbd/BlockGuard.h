@@ -6,12 +6,12 @@
 
 #include "include/int_types.h"
 #include "common/dout.h"
-#include "common/Mutex.h"
+#include "common/ceph_mutex.h"
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/set.hpp>
 #include <deque>
 #include <list>
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
@@ -48,7 +48,7 @@ public:
   typedef std::list<BlockOperation> BlockOperations;
 
   BlockGuard(CephContext *cct)
-    : m_cct(cct), m_lock("librbd::BlockGuard::m_lock") {
+    : m_cct(cct) {
   }
 
   BlockGuard(const BlockGuard&) = delete;
@@ -63,7 +63,7 @@ public:
    */
   int detain(const BlockExtent &block_extent, BlockOperation *block_operation,
              BlockGuardCell **cell) {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     ldout(m_cct, 20) << "block_start=" << block_extent.block_start << ", "
                      << "block_end=" << block_extent.block_end << ", "
                      << "free_slots=" << m_free_detained_block_extents.size()
@@ -104,9 +104,9 @@ public:
    * Release any detained IO operations from the provided cell.
    */
   void release(BlockGuardCell *cell, BlockOperations *block_operations) {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
 
-    assert(cell != nullptr);
+    ceph_assert(cell != nullptr);
     auto &detained_block_extent = reinterpret_cast<DetainedBlockExtent &>(
       *cell);
     ldout(m_cct, 20) << "block_start="
@@ -158,7 +158,7 @@ private:
 
   CephContext *m_cct;
 
-  Mutex m_lock;
+  ceph::mutex m_lock = ceph::make_mutex("librbd::BlockGuard::m_lock");
   DetainedBlockExtentsPool m_detained_block_extent_pool;
   DetainedBlockExtents m_free_detained_block_extents;
   BlockExtentToDetainedBlockExtents m_detained_block_extents;

@@ -1,62 +1,60 @@
-table.ceph-chartbox {
-  width: 100%;
+@import 'styles';
 
-  td {
-    text-align: center;
-    font-weight: bold;
-  }
+cd-info-card {
+  padding: 0 0.5vw 0 0.5vw;
+  @extend .d-flex;
+  @extend .flex-column;
+  @extend .mb-4;
 }
 
-.center-block {
-  width: 120px;
-}
+::ng-deep .pg-status-popover-wrapper {
+  position: relative;
 
-.pie {
-  height: 120px;
-  width: 120px;
-}
+  .popover {
+    position: absolute;
+    width: 116%;
+    max-height: 20vh;
+    min-width: unset !important;
+    max-width: unset !important;
 
-.media {
-  display: block;
-  min-height: 60px;
-  width: 100%;
-
-  .media-left {
-    border-top-left-radius: 2px;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-    border-bottom-left-radius: 2px;
-    display: block;
-    float: left;
-    height: 60px;
-    width: 60px;
-    text-align: center;
-    font-size: 40px;
-    line-height: 60px;
-    padding-right: 0;
-
-    .fa {
-      font-size: 45px;
+    .popover-body {
+      max-width: 100%;
+      max-height: 19vh;
+      font-size: 12px;
     }
   }
+}
 
-  .media-body {
-    padding: 5px 10px;
-    margin-left: 60px;
+.logs-link {
+  text-align: center;
+}
 
-    .media-heading {
-      text-transform: uppercase;
-      display: block;
-      font-size: 14px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
+.card-text-error {
+  display: inline;
+  color: $color-solid-red;
+}
 
-    .media-text {
-      display: block;
-      font-weight: bold;
-      font-size: 18px;
-    }
+.card-text-line-break:after {
+  content: '\A';
+  white-space: pre;
+}
+
+.mgr-active-name:hover {
+  cursor: pointer;
+}
+
+::ng-deep cd-info-card {
+  @extend .col-12;
+  @extend .col-sm-12;
+  @extend .col-md-6;
+  @extend .col-lg-4;
+
+  &.cd-status-card {
+    @extend .col-xl-3;
+  }
+
+  &.cd-performance-card,
+  &.cd-capacity-card {
+    @extend .col-xl;
   }
 }

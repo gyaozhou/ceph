@@ -79,8 +79,8 @@ class WBThrottle : Thread, public md_config_obs_t {
   CephContext *cct;
   PerfCounters *logger;
   bool stopping;
-  Mutex lock;
-  Cond cond;
+  ceph::mutex lock = ceph::make_mutex("WBThrottle::lock");
+  ceph::condition_variable cond;
 
 
   /**
@@ -89,7 +89,7 @@ class WBThrottle : Thread, public md_config_obs_t {
   list<ghobject_t> lru;
   ceph::unordered_map<ghobject_t, list<ghobject_t>::iterator> rev_lru;
   void remove_object(const ghobject_t &oid) {
-    assert(lock.is_locked());
+    ceph_assert(ceph_mutex_is_locked(lock));
     ceph::unordered_map<ghobject_t, list<ghobject_t>::iterator>::iterator iter =
       rev_lru.find(oid);
     if (iter == rev_lru.end())
@@ -99,14 +99,14 @@ class WBThrottle : Thread, public md_config_obs_t {
     rev_lru.erase(iter);
   }
   ghobject_t pop_object() {
-    assert(!lru.empty());
+    ceph_assert(!lru.empty());
     ghobject_t oid(lru.front());
     lru.pop_front();
     rev_lru.erase(oid);
     return oid;
   }
   void insert_object(const ghobject_t &oid) {
-    assert(rev_lru.find(oid) == rev_lru.end());
+    ceph_assert(rev_lru.find(oid) == rev_lru.end());
     lru.push_back(oid);
     rev_lru.insert(make_pair(oid, --lru.end()));
   }
@@ -115,6 +115,7 @@ class WBThrottle : Thread, public md_config_obs_t {
 
   /// get next flush to perform
   bool get_next_should_flush(
+    std::unique_lock<ceph::mutex>& locker,
     boost::tuple<ghobject_t, FDRef, PendingWB> *next ///< [out] next to flush
     ); ///< @return false if we are shutting down
 public:
@@ -152,7 +153,7 @@ public:
   void stop();
   /// Set fs as XFS or BTRFS
   void set_fs(FS new_fs) {
-    Mutex::Locker l(lock);
+    std::lock_guard l{lock};
     fs = new_fs;
     set_from_conf();
   }
@@ -177,7 +178,7 @@ public:
 
   /// md_config_obs_t
   const char** get_tracked_conf_keys() const override;
-  void handle_conf_change(const md_config_t *conf,
+  void handle_conf_change(const ConfigProxy& conf,
 			  const std::set<std::string> &changed) override;
 
   /// Thread

@@ -57,7 +57,7 @@ void SyncPointPruneRequest<I>::send() {
   } else {
     // if we have more than one sync point or invalid sync points,
     // trim them off
-    RWLock::RLocker snap_locker(m_remote_image_ctx->snap_lock);
+    std::shared_lock image_locker{m_remote_image_ctx->image_lock};
     std::set<std::string> snap_names;
     for (auto it = m_client_meta_copy.sync_points.rbegin();
          it != m_client_meta_copy.sync_points.rend(); ++it) {
@@ -120,7 +120,7 @@ template <typename I>
 void SyncPointPruneRequest<I>::handle_remove_snap(int r) {
   dout(20) << ": r=" << r << dendl;
 
-  assert(!m_snap_names.empty());
+  ceph_assert(!m_snap_names.empty());
   std::string snap_name = m_snap_names.front();
   m_snap_names.pop_front();
 

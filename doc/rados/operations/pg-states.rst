@@ -22,6 +22,12 @@ map is ``active + clean``.
 *down*
   A replica with necessary data is down, so the placement group is offline.
 
+*laggy*
+  A replica is not acknowledging new leases from the primary in a timely fashion; IO is temporarily paused.
+
+*wait*
+  The set of OSDs for this PG has just changed and IO is temporarily paused until the previous interval's leases expire.
+
 *scrubbing*
   Ceph is checking the placement group metadata for inconsistencies.
 
@@ -69,8 +75,8 @@ map is ``active + clean``.
   The placement group is waiting in line to start backfill.
 
 *backfill_toofull*
-  A backfill operation is waiting because the destination OSD is over its
-  full ratio.
+  A backfill operation is waiting because the destination OSD is over
+  the backfillfull ratio.
 
 *backfill_unfound*
   Backfill stopped due to unfound objects.
@@ -101,8 +107,12 @@ map is ``active + clean``.
 *snaptrim*
   Trimming snaps.
 
-*snaptrim_Wait*
+*snaptrim_wait*
   Queued to trim snaps.
 
-*snaptrim_Error*
+*snaptrim_error*
   Error stopped trimming snaps.
+
+*unknown*
+  The ceph-mgr hasn't yet received any information about the PG's state from an
+  OSD since mgr started up.

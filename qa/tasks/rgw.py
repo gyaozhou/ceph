@@ -3,29 +3,27 @@ rgw routines
 """
 import argparse
 import contextlib
-import json
 import logging
-import os
-import errno
-import util.rgw as rgw_utils
 
 from teuthology.orchestra import run
 from teuthology import misc as teuthology
 from teuthology import contextutil
-from teuthology.orchestra.run import CommandFailedError
+from teuthology.exceptions import ConfigError
 from util import get_remote_for_role
 from util.rgw import rgwadmin, wait_for_radosgw
-from util.rados import (rados, create_ec_pool,
-                                        create_replicated_pool,
-                                        create_cache_pool)
+from util.rados import (create_ec_pool,
+                        create_replicated_pool,
+                        create_cache_pool)
 
 log = logging.getLogger(__name__)
 
 class RGWEndpoint:
-    def __init__(self, hostname=None, port=None, cert=None):
+    def __init__(self, hostname=None, port=None, cert=None, dns_name=None, website_dns_name=None):
         self.hostname = hostname
         self.port = port
         self.cert = cert
+        self.dns_name = dns_name
+        self.website_dns_name = website_dns_name
 
     def url(self):
         proto = 'https' if self.cert else 'http'
@@ -39,7 +37,7 @@ def start_rgw(ctx, config, clients):
     log.info('Starting rgw...')
     testdir = teuthology.get_testdir(ctx)
     for client in clients:
-        (remote,) = ctx.cluster.only(client).remotes.iterkeys()
+        (remote,) = ctx.cluster.only(client).remotes.keys()
         cluster_name, daemon_type, client_id = teuthology.split_role(client)
         client_with_id = daemon_type + '.' + client_id
         client_with_cluster = cluster_name + '.' + client_with_id
@@ -86,7 +84,7 @@ def start_rgw(ctx, config, clients):
             '/var/log/ceph/rgw.{client_with_cluster}.log'.format(client_with_cluster=client_with_cluster),
             '--rgw_ops_log_socket_path',
             '{tdir}/rgw.opslog.{client_with_cluster}.sock'.format(tdir=testdir,
-                                                     client_with_cluster=client_with_cluster)
+                                                     client_with_cluster=client_with_cluster),
 	    ])
 
         keystone_role = client_config.get('use-keystone-role', None)
@@ -104,6 +102,45 @@ def start_rgw(ctx, config, clients):
                 'http://{khost}:{kport}'.format(khost=keystone_host,
                                                 kport=keystone_port),
                 ])
+
+
+        if client_config.get('dns-name'):
+            rgw_cmd.extend(['--rgw-dns-name', endpoint.dns_name])
+        if client_config.get('dns-s3website-name'):
+            rgw_cmd.extend(['--rgw-dns-s3website-name', endpoint.website_dns_name])
+
+
+        vault_role = client_config.get('use-vault-role', None)
+        barbican_role = client_config.get('use-barbican-role', None)
+
+        token_path = teuthology.get_testdir(ctx) + '/vault-token'
+        if barbican_role is not None:
+            if not hasattr(ctx, 'barbican'):
+                raise ConfigError('rgw must run after the barbican task')
+
+            barbican_host, barbican_port = \
+                ctx.barbican.endpoints[barbican_role]
+            log.info("Use barbican url=%s:%s", barbican_host, barbican_port)
+
+            rgw_cmd.extend([
+                '--rgw_barbican_url',
+                'http://{bhost}:{bport}'.format(bhost=barbican_host,
+                                                bport=barbican_port),
+                ])
+        elif vault_role is not None:
+            if not ctx.vault.root_token:
+                raise ConfigError('vault: no "root_token" specified')
+            # create token on file
+            ctx.cluster.only(client).run(args=['echo', '-n', ctx.vault.root_token, run.Raw('>'), token_path])
+            log.info("Restrict access to token file")
+            ctx.cluster.only(client).run(args=['chmod', '600', token_path])
+            log.info("Token file content")
+            ctx.cluster.only(client).run(args=['cat', token_path])
+
+            rgw_cmd.extend([
+                '--rgw_crypt_vault_addr', "{}:{}".format(*ctx.vault.endpoints[vault_role]),
+                '--rgw_crypt_vault_token_file', token_path
+            ])
 
         rgw_cmd.extend([
             '--foreground',
@@ -140,7 +177,8 @@ def start_rgw(ctx, config, clients):
         endpoint = ctx.rgw.role_endpoints[client]
         url = endpoint.url()
         log.info('Polling {client} until it starts accepting connections on {url}'.format(client=client, url=url))
-        wait_for_radosgw(url)
+        (remote,) = ctx.cluster.only(client).remotes.keys()
+        wait_for_radosgw(url, remote)
 
     try:
         yield
@@ -158,15 +196,11 @@ def start_rgw(ctx, config, clients):
                                                              client=client_with_cluster),
                     ],
                 )
+            ctx.cluster.only(client).run(args=['rm', '-f', token_path])
 
 def assign_endpoints(ctx, config, default_cert):
-    """
-    Assign port numbers starting with port 7280.
-    """
-    port = 7280
     role_endpoints = {}
-
-    for role, client_config in config.iteritems():
+    for role, client_config in config.items():
         client_config = client_config or {}
         remote = get_remote_for_role(ctx, role)
 
@@ -181,8 +215,19 @@ def assign_endpoints(ctx, config, default_cert):
         else:
             ssl_certificate = None
 
-        role_endpoints[role] = RGWEndpoint(remote.hostname, port, ssl_certificate)
-        port += 1
+        port = client_config.get('port', 443 if ssl_certificate else 80)
+
+        # if dns-name is given, use it as the hostname (or as a prefix)
+        dns_name = client_config.get('dns-name', '')
+        if len(dns_name) == 0 or dns_name.endswith('.'):
+            dns_name += remote.hostname
+
+        website_dns_name = client_config.get('dns-s3website-name')
+        if website_dns_name:
+            if len(website_dns_name) == 0 or website_dns_name.endswith('.'):
+                website_dns_name += remote.hostname
+
+        role_endpoints[role] = RGWEndpoint(remote.hostname, port, ssl_certificate, dns_name, website_dns_name)
 
     return role_endpoints
 
@@ -193,7 +238,7 @@ def create_pools(ctx, clients):
     log.info('Creating data pools')
     for client in clients:
         log.debug("Obtaining remote for client {}".format(client))
-        (remote,) = ctx.cluster.only(client).remotes.iterkeys()
+        (remote,) = ctx.cluster.only(client).remotes.keys()
         data_pool = 'default.rgw.buckets.data'
         cluster_name, daemon_type, client_id = teuthology.split_role(client)
 
@@ -226,6 +271,34 @@ def configure_compression(ctx, clients, compression):
                      '--placement-id', 'default-placement',
                      '--compression', compression],
                 check_status=True)
+    yield
+
+@contextlib.contextmanager
+def configure_storage_classes(ctx, clients, storage_classes):
+    """ set a compression type in the default zone placement """
+
+    sc = [s.strip() for s in storage_classes.split(',')]
+
+    for client in clients:
+        # XXX: the 'default' zone and zonegroup aren't created until we run RGWRados::init_complete().
+        # issue a 'radosgw-admin user list' command to trigger this
+        rgwadmin(ctx, client, cmd=['user', 'list'], check_status=True)
+
+        for storage_class in sc:
+            log.info('Configuring storage class type = %s', storage_class)
+            rgwadmin(ctx, client,
+                    cmd=['zonegroup', 'placement', 'add',
+                        '--rgw-zone', 'default',
+                        '--placement-id', 'default-placement',
+                        '--storage-class', storage_class],
+                    check_status=True)
+            rgwadmin(ctx, client,
+                    cmd=['zone', 'placement', 'add',
+                        '--rgw-zone', 'default',
+                        '--placement-id', 'default-placement',
+                        '--storage-class', storage_class,
+                        '--data-pool', 'default.rgw.buckets.data.' + storage_class.lower()],
+                    check_status=True)
     yield
 
 @contextlib.contextmanager
@@ -287,6 +360,7 @@ def task(ctx, config):
     ctx.rgw.cache_pools = bool(config.pop('cache-pools', False))
     ctx.rgw.frontend = config.pop('frontend', 'civetweb')
     ctx.rgw.compression_type = config.pop('compression type', None)
+    ctx.rgw.storage_classes = config.pop('storage classes', None)
     default_cert = config.pop('ssl certificate', None)
     ctx.rgw.data_pool_pg_size = config.pop('data_pool_pg_size', 64)
     ctx.rgw.index_pool_pg_size = config.pop('index_pool_pg_size', 64)
@@ -304,6 +378,11 @@ def task(ctx, config):
         subtasks.extend([
             lambda: configure_compression(ctx=ctx, clients=clients,
                                           compression=ctx.rgw.compression_type),
+        ])
+    if ctx.rgw.storage_classes:
+        subtasks.extend([
+            lambda: configure_storage_classes(ctx=ctx, clients=clients,
+                                              storage_classes=ctx.rgw.storage_classes),
         ])
     subtasks.extend([
         lambda: start_rgw(ctx=ctx, config=config, clients=clients),

@@ -18,31 +18,31 @@ function json_extract {
 var=""
 [ "$1" != "" ] && var=$(var_to_python_json_index $1)
 shift
-python - <<END
+python3 - <<END
 import json
 s='$@'
 data = json.loads(s) 
-print data$var
+print(data$var)
 END
 }
 
 function python_array_len {
-python - <<END
+python3 - <<END
 arr=$@
-print len(arr)
+print(len(arr))
 END
 }
 
 function project_python_array_field {
 var=$(var_to_python_json_index $1)
 shift
-python - <<END
+python3 - <<END
 arr=$@
 s='( '
 for x in arr:
     s += '"' + str(x$var) + '" '
 s += ')'
-print s
+print(s)
 END
 }
 
@@ -60,6 +60,8 @@ mstart=$root_path/mstart.sh
 mstop=$root_path/mstop.sh
 mrun=$root_path/mrun
 mrgw=$root_path/mrgw.sh
+
+url=http://localhost
 
 function start_ceph_cluster {
   [ $# -ne 1 ] && echo "start_ceph_cluster() needs 1 param" && exit 1
@@ -86,7 +88,7 @@ function init_first_zone {
   realm=$2
   zg=$3
   zone=$4
-  endpoints=$5
+  endpoints=$url:$5
 
   access_key=$6
   secret=$7
@@ -110,15 +112,15 @@ function init_zone_in_existing_zg {
   zg=$3
   zone=$4
   master_zg_zone1_port=$5
-  endpoints=$6
+  endpoints=$url:$6
 
   access_key=$7
   secret=$8
 
-  x $(rgw_admin $cid) realm pull --url=http://localhost:$master_zg_zone1_port --access-key=${access_key} --secret=${secret} --default
+  x $(rgw_admin $cid) realm pull --url=$url:$master_zg_zone1_port --access-key=${access_key} --secret=${secret} --default
   x $(rgw_admin $cid) zonegroup default --rgw-zonegroup=$zg
   x $(rgw_admin $cid) zone create --rgw-zonegroup=$zg --rgw-zone=$zone --access-key=${access_key} --secret=${secret} --endpoints=$endpoints
-  x $(rgw_admin $cid) period update --commit --url=http://localhost:$master_zg_zone1_port --access-key=${access_key} --secret=${secret}
+  x $(rgw_admin $cid) period update --commit --url=$url:$master_zg_zone1_port --access-key=${access_key} --secret=${secret}
 }
 
 function init_first_zone_in_slave_zg {
@@ -129,13 +131,13 @@ function init_first_zone_in_slave_zg {
   zg=$3
   zone=$4
   master_zg_zone1_port=$5
-  endpoints=$6
+  endpoints=$url:$6
 
   access_key=$7
   secret=$8
 
 # create zonegroup, zone
-  x $(rgw_admin $cid) realm pull --url=http://localhost:$master_zg_zone1_port --access-key=${access_key} --secret=${secret}
+  x $(rgw_admin $cid) realm pull --url=$url:$master_zg_zone1_port --access-key=${access_key} --secret=${secret}
   x $(rgw_admin $cid) realm default --rgw-realm=$realm
   x $(rgw_admin $cid) zonegroup create --rgw-realm=$realm --rgw-zonegroup=$zg --endpoints=$endpoints --default
   x $(rgw_admin $cid) zonegroup default --rgw-zonegroup=$zg

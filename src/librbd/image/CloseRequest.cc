@@ -29,7 +29,7 @@ template <typename I>
 CloseRequest<I>::CloseRequest(I *image_ctx, Context *on_finish)
   : m_image_ctx(image_ctx), m_on_finish(on_finish), m_error_result(0),
     m_exclusive_lock(nullptr) {
-  assert(image_ctx != nullptr);
+  ceph_assert(image_ctx != nullptr);
 }
 
 template <typename I>
@@ -89,7 +89,7 @@ void CloseRequest<I>::send_shut_down_io_queue() {
   CephContext *cct = m_image_ctx->cct;
   ldout(cct, 10) << this << " " << __func__ << dendl;
 
-  RWLock::RLocker owner_locker(m_image_ctx->owner_lock);
+  std::shared_lock owner_locker{m_image_ctx->owner_lock};
   m_image_ctx->io_work_queue->shut_down(create_context_callback<
     CloseRequest<I>, &CloseRequest<I>::handle_shut_down_io_queue>(this));
 }
@@ -105,13 +105,13 @@ void CloseRequest<I>::handle_shut_down_io_queue(int r) {
 template <typename I>
 void CloseRequest<I>::send_shut_down_exclusive_lock() {
   {
-    RWLock::WLocker owner_locker(m_image_ctx->owner_lock);
+    std::unique_lock owner_locker{m_image_ctx->owner_lock};
     m_exclusive_lock = m_image_ctx->exclusive_lock;
 
     // if reading a snapshot -- possible object map is open
-    RWLock::WLocker snap_locker(m_image_ctx->snap_lock);
-    if (m_exclusive_lock == nullptr) {
-      delete m_image_ctx->object_map;
+    std::unique_lock image_locker{m_image_ctx->image_lock};
+    if (m_exclusive_lock == nullptr && m_image_ctx->object_map) {
+      m_image_ctx->object_map->put();
       m_image_ctx->object_map = nullptr;
     }
   }
@@ -136,16 +136,16 @@ void CloseRequest<I>::handle_shut_down_exclusive_lock(int r) {
   ldout(cct, 10) << this << " " << __func__ << ": r=" << r << dendl;
 
   {
-    RWLock::RLocker owner_locker(m_image_ctx->owner_lock);
-    assert(m_image_ctx->exclusive_lock == nullptr);
+    std::shared_lock owner_locker{m_image_ctx->owner_lock};
+    ceph_assert(m_image_ctx->exclusive_lock == nullptr);
 
     // object map and journal closed during exclusive lock shutdown
-    RWLock::RLocker snap_locker(m_image_ctx->snap_lock);
-    assert(m_image_ctx->journal == nullptr);
-    assert(m_image_ctx->object_map == nullptr);
+    std::shared_lock image_locker{m_image_ctx->image_lock};
+    ceph_assert(m_image_ctx->journal == nullptr);
+    ceph_assert(m_image_ctx->object_map == nullptr);
   }
 
-  delete m_exclusive_lock;
+  m_exclusive_lock->put();
   m_exclusive_lock = nullptr;
 
   save_result(r);
@@ -162,11 +162,11 @@ void CloseRequest<I>::send_flush() {
   CephContext *cct = m_image_ctx->cct;
   ldout(cct, 10) << this << " " << __func__ << dendl;
 
-  RWLock::RLocker owner_locker(m_image_ctx->owner_lock);
+  std::shared_lock owner_locker{m_image_ctx->owner_lock};
   auto ctx = create_context_callback<
     CloseRequest<I>, &CloseRequest<I>::handle_flush>(this);
-  auto aio_comp = io::AioCompletion::create(ctx, m_image_ctx,
-                                            io::AIO_TYPE_FLUSH);
+  auto aio_comp = io::AioCompletion::create_and_start(ctx, m_image_ctx,
+                                                      io::AIO_TYPE_FLUSH);
   auto req = io::ImageDispatchSpec<I>::create_flush_request(
     *m_image_ctx, aio_comp, io::FLUSH_SOURCE_INTERNAL, {});
   req->send();
@@ -290,6 +290,7 @@ void CloseRequest<I>::handle_close_parent(int r) {
   ldout(cct, 10) << this << " " << __func__ << ": r=" << r << dendl;
 
   delete m_image_ctx->parent;
+  m_image_ctx->parent = nullptr;
   save_result(r);
   if (r < 0) {
     lderr(cct) << "error closing parent image: " << cpp_strerror(r) << dendl;

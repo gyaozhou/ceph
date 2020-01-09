@@ -20,17 +20,19 @@
 #include "include/types.h"
 
 
-class MMDSResolveAck : public Message {
- public:
+class MMDSResolveAck : public SafeMessage {
+  static const int HEAD_VERSION = 1;
+  static const int COMPAT_VERSION = 1;
+public:
   map<metareqid_t, bufferlist> commit;
   vector<metareqid_t> abort;
 
-  MMDSResolveAck() : Message(MSG_MDS_RESOLVEACK) {}
-private:
+protected:
+  MMDSResolveAck() : SafeMessage{MSG_MDS_RESOLVEACK, HEAD_VERSION, COMPAT_VERSION} {}
   ~MMDSResolveAck() override {}
 
 public:
-  const char *get_type_name() const override { return "resolve_ack"; }
+  std::string_view get_type_name() const override { return "resolve_ack"; }
   /*void print(ostream& out) const {
     out << "resolve_ack.size()
 	<< "+" << ambiguous_imap.size()
@@ -56,6 +58,9 @@ public:
     decode(commit, p);
     decode(abort, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

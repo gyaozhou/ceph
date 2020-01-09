@@ -45,7 +45,7 @@ void TrashMoveRequest<I>::get_mirror_image_id() {
     &TrashMoveRequest<I>::handle_get_mirror_image_id>(this);
   m_out_bl.clear();
   int r = m_io_ctx.aio_operate(RBD_MIRRORING, aio_comp, &op, &m_out_bl);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -122,7 +122,7 @@ void TrashMoveRequest<I>::disable_mirror_image() {
     TrashMoveRequest<I>,
     &TrashMoveRequest<I>::handle_disable_mirror_image>(this);
   int r = m_io_ctx.aio_operate(RBD_MIRRORING, aio_comp, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -159,7 +159,7 @@ void TrashMoveRequest<I>::reset_journal() {
     TrashMoveRequest<I>, &TrashMoveRequest<I>::handle_reset_journal>(this);
   auto req = librbd::journal::ResetRequest<I>::create(
     m_io_ctx, m_image_id, librbd::Journal<>::IMAGE_CLIENT_ID,
-    m_mirror_uuid, m_op_work_queue, ctx);
+    librbd::Journal<>::LOCAL_MIRROR_UUID, m_op_work_queue, ctx);
   req->send();
 }
 
@@ -184,13 +184,13 @@ void TrashMoveRequest<I>::open_image() {
 
   {
     // don't attempt to open the journal
-    RWLock::WLocker snap_locker(m_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_image_ctx->image_lock};
     m_image_ctx->set_journal_policy(new JournalPolicy());
   }
 
   Context *ctx = create_context_callback<
     TrashMoveRequest<I>, &TrashMoveRequest<I>::handle_open_image>(this);
-  m_image_ctx->state->open(true, ctx);
+  m_image_ctx->state->open(librbd::OPEN_FLAG_SKIP_OPEN_PARENT, ctx);
 }
 
 template <typename I>
@@ -217,10 +217,10 @@ void TrashMoveRequest<I>::handle_open_image(int r) {
 
 template <typename I>
 void TrashMoveRequest<I>::acquire_lock() {
-  m_image_ctx->owner_lock.get_read();
+  m_image_ctx->owner_lock.lock_shared();
   if (m_image_ctx->exclusive_lock == nullptr) {
     derr << "exclusive lock feature not enabled" << dendl;
-    m_image_ctx->owner_lock.put_read();
+    m_image_ctx->owner_lock.unlock_shared();
     m_ret_val = -EINVAL;
     close_image();
     return;
@@ -232,7 +232,7 @@ void TrashMoveRequest<I>::acquire_lock() {
     TrashMoveRequest<I>, &TrashMoveRequest<I>::handle_acquire_lock>(this);
   m_image_ctx->exclusive_lock->block_requests(0);
   m_image_ctx->exclusive_lock->acquire_lock(ctx);
-  m_image_ctx->owner_lock.put_read();
+  m_image_ctx->owner_lock.unlock_shared();
 }
 
 template <typename I>
@@ -255,7 +255,8 @@ void TrashMoveRequest<I>::trash_move() {
 
   utime_t delete_time{ceph_clock_now()};
   utime_t deferment_end_time{delete_time};
-  deferment_end_time += m_image_ctx->mirroring_delete_delay;
+  deferment_end_time +=
+    m_image_ctx->config.template get_val<uint64_t>("rbd_mirroring_delete_delay");
 
   m_trash_image_spec = {
     cls::rbd::TRASH_IMAGE_SOURCE_MIRRORING, m_image_ctx->name, delete_time,
@@ -294,7 +295,7 @@ void TrashMoveRequest<I>::remove_mirror_image() {
     TrashMoveRequest<I>,
     &TrashMoveRequest<I>::handle_remove_mirror_image>(this);
   int r = m_io_ctx.aio_operate(RBD_MIRRORING, aio_comp, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 

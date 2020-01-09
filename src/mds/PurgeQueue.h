@@ -36,20 +36,47 @@ public:
     PURGE_DIR
   };
 
-  Action action;
-  inodeno_t ino;
-  uint64_t size;
+  PurgeItem() {}
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::const_iterator &p);
+
+  static Action str_to_type(std::string_view str) {
+    return PurgeItem::actions.at(std::string(str));
+  }
+
+  void dump(Formatter *f) const
+  {
+    f->dump_int("action", action);
+    f->dump_int("ino", ino);
+    f->dump_int("size", size);
+    f->open_object_section("layout");
+    layout.dump(f);
+    f->close_section();
+    f->open_object_section("SnapContext");
+    snapc.dump(f);
+    f->close_section();
+    f->open_object_section("fragtree");
+    fragtree.dump(f);
+    f->close_section();
+  }
+
+  std::string_view get_type_str() const;
+
+  utime_t stamp;
+  //None PurgeItem serves as NoOp for splicing out journal entries;
+  //so there has to be a "pad_size" to specify the size of journal
+  //space to be spliced.
+  uint32_t pad_size = 0;
+  Action action = NONE;
+  inodeno_t ino = 0;
+  uint64_t size = 0;
   file_layout_t layout;
   compact_set<int64_t> old_pools;
   SnapContext snapc;
   fragtree_t fragtree;
-
-  PurgeItem()
-   : action(NONE), ino(0), size(0)
-  {}
-
-  void encode(bufferlist &bl) const;
-  void decode(bufferlist::const_iterator &p);
+private:
+  static const std::map<std::string, PurgeItem::Action> actions;
 };
 WRITE_CLASS_ENCODER(PurgeItem)
 
@@ -60,6 +87,7 @@ enum {
   l_pq_executing_ops,
   l_pq_executing,
   l_pq_executed,
+  l_pq_item_in_journal,
   l_pq_last
 };
 
@@ -73,69 +101,15 @@ enum {
  */
 class PurgeQueue
 {
-protected:
-  CephContext *cct;
-  const mds_rank_t rank;
-  Mutex lock;
-
-  int64_t metadata_pool;
-
-  // Don't use the MDSDaemon's Finisher and Timer, because this class
-  // operates outside of MDSDaemon::mds_lock
-  Finisher finisher;
-  SafeTimer timer;
-  Filer filer;
-  Objecter *objecter;
-  std::unique_ptr<PerfCounters> logger;
-
-  Journaler journaler;
-
-  Context *on_error;
-
-  // Map of Journaler offset to PurgeItem
-  std::map<uint64_t, PurgeItem> in_flight;
-
-  std::set<uint64_t> pending_expire;
-
-  // Throttled allowances
-  uint64_t ops_in_flight;
-
-  // Dynamic op limit per MDS based on PG count
-  uint64_t max_purge_ops;
-
-  uint32_t _calculate_ops(const PurgeItem &item) const;
-
-  bool can_consume();
-
-  // How many bytes were remaining when drain() was first called,
-  // used for indicating progress.
-  uint64_t drain_initial;
-
-  // Has drain() ever been called on this instance?
-  bool draining;
-
-  // recover the journal write_pos (drop any partial written entry)
-  void _recover();
-
-  /**
-   * @return true if we were in a position to try and consume something:
-   *         does not mean we necessarily did.
-   */
-  bool _consume();
-
-  // Do we currently have a flush timer event waiting?
-  Context *delayed_flush;
-
-  void _execute_item(
-      const PurgeItem &item,
-      uint64_t expire_to);
-  void _execute_item_complete(
-      uint64_t expire_to);
-
-  bool recovered;
-  std::list<Context*> waiting_for_recovery;
-
 public:
+  PurgeQueue(
+      CephContext *cct_,
+      mds_rank_t rank_,
+      const int64_t metadata_pool_,
+      Objecter *objecter_,
+      Context *on_error);
+  ~PurgeQueue();
+
   void init();
   void activate();
   void shutdown();
@@ -176,19 +150,70 @@ public:
 
   void update_op_limit(const MDSMap &mds_map);
 
-  void handle_conf_change(const struct md_config_t *conf,
-                          const std::set <std::string> &changed,
-                          const MDSMap &mds_map);
+  void handle_conf_change(const std::set<std::string>& changed, const MDSMap& mds_map);
 
-  PurgeQueue(
-      CephContext *cct_,
-      mds_rank_t rank_,
-      const int64_t metadata_pool_,
-      Objecter *objecter_,
-      Context *on_error);
-  ~PurgeQueue();
+protected:
+  uint32_t _calculate_ops(const PurgeItem &item) const;
+
+  bool _can_consume();
+
+  // recover the journal write_pos (drop any partial written entry)
+  void _recover();
+
+  /**
+   * @return true if we were in a position to try and consume something:
+   *         does not mean we necessarily did.
+   */
+  bool _consume();
+
+  void _execute_item(const PurgeItem &item, uint64_t expire_to);
+  void _execute_item_complete(uint64_t expire_to);
+
+  void _go_readonly(int r);
+
+  CephContext *cct;
+  const mds_rank_t rank;
+  ceph::mutex lock = ceph::make_mutex("PurgeQueue");
+  bool readonly = false;
+
+  int64_t metadata_pool;
+
+  // Don't use the MDSDaemon's Finisher and Timer, because this class
+  // operates outside of MDSDaemon::mds_lock
+  Finisher finisher;
+  SafeTimer timer;
+  Filer filer;
+  Objecter *objecter;
+  std::unique_ptr<PerfCounters> logger;
+
+  Journaler journaler;
+
+  Context *on_error;
+
+  // Map of Journaler offset to PurgeItem
+  std::map<uint64_t, PurgeItem> in_flight;
+
+  std::set<uint64_t> pending_expire;
+
+  // Throttled allowances
+  uint64_t ops_in_flight = 0;
+
+  // Dynamic op limit per MDS based on PG count
+  uint64_t max_purge_ops = 0;
+
+  // How many bytes were remaining when drain() was first called,
+  // used for indicating progress.
+  uint64_t drain_initial = 0;
+
+  // Has drain() ever been called on this instance?
+  bool draining = false;
+
+  // Do we currently have a flush timer event waiting?
+  Context *delayed_flush = nullptr;
+
+  bool recovered = false;
+  std::vector<Context*> waiting_for_recovery;
+
+  size_t purge_item_journal_size;
 };
-
-
 #endif
-

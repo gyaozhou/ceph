@@ -32,7 +32,7 @@ function run() {
         setup $dir || return 1
         run_mon $dir a || return 1
 	run_mgr $dir x || return 1
-	create_rbd_pool || return 1
+	create_pool rbd 4 || return 1
 
         # check that erasure code plugins are preloaded
         CEPH_ARGS='' ceph --admin-daemon $(get_asok_path mon.a) log flush || return 1
@@ -49,7 +49,6 @@ function setup_osds() {
     for id in $(seq 0 $(expr $count - 1)) ; do
         run_osd $dir $id || return 1
     done
-    wait_for_clean || return 1
 
     # check that erasure code plugins are preloaded
     CEPH_ARGS='' ceph --admin-daemon $(get_asok_path osd.0) log flush || return 1
@@ -60,7 +59,7 @@ function get_state() {
     local pgid=$1
     local sname=state
     ceph --format json pg dump pgs 2>/dev/null | \
-        jq -r ".[] | select(.pgid==\"$pgid\") | .$sname"
+        jq -r ".pg_stats | .[] | select(.pgid==\"$pgid\") | .$sname"
 }
 
 function create_erasure_coded_pool() {
@@ -174,15 +173,16 @@ function rados_put_get_data() {
         ceph osd out ${last_osd} || return 1
         ! get_osds $poolname $objname | grep '\<'${last_osd}'\>' || return 1
         ceph osd in ${last_osd} || return 1
-        run_osd $dir ${last_osd} || return 1
+        activate_osd $dir ${last_osd} || return 1
         wait_for_clean || return 1
+        # Won't check for eio on get here -- recovery above might have fixed it
+    else
+        shard_id=$(expr $shard_id + 1)
+        inject_$inject ec data $poolname $objname $dir $shard_id || return 1
+        rados_get $dir $poolname $objname fail || return 1
+        rm $dir/ORIGINAL
     fi
 
-    shard_id=$(expr $shard_id + 1)
-    inject_$inject ec data $poolname $objname $dir $shard_id || return 1
-    # Now 2 out of 3 shards get an error, so should fail
-    rados_get $dir $poolname $objname fail || return 1
-    rm $dir/ORIGINAL
 }
 
 # Change the size of speificied shard
@@ -374,7 +374,7 @@ function TEST_ec_object_attr_read_error() {
     inject_eio ec mdata $poolname $objname $dir 1 || return 1
 
     # Restart OSD
-    run_osd $dir ${primary_osd} || return 1
+    activate_osd $dir ${primary_osd} || return 1
 
     # Cluster should recover this object
     wait_for_clean || return 1
@@ -542,7 +542,7 @@ function TEST_ec_backfill_unfound() {
     inject_eio ec data $poolname $testobj $dir 0 || return 1
     inject_eio ec data $poolname $testobj $dir 1 || return 1
 
-    run_osd $dir ${last_osd} || return 1
+    activate_osd $dir ${last_osd} || return 1
     ceph osd in ${last_osd} || return 1
 
     sleep 15
@@ -558,7 +558,7 @@ function TEST_ec_backfill_unfound() {
     done
 
     ceph pg dump pgs
-    ceph pg 2.0 list_missing | grep -q $testobj || return 1
+    ceph pg 2.0 list_unfound | grep -q $testobj || return 1
 
     # Command should hang because object is unfound
     timeout 5 rados -p $poolname get $testobj $dir/CHECK
@@ -622,7 +622,7 @@ function TEST_ec_recovery_unfound() {
     inject_eio ec data $poolname $testobj $dir 0 || return 1
     inject_eio ec data $poolname $testobj $dir 1 || return 1
 
-    run_osd $dir ${last_osd} || return 1
+    activate_osd $dir ${last_osd} || return 1
     ceph osd in ${last_osd} || return 1
 
     sleep 15
@@ -638,7 +638,7 @@ function TEST_ec_recovery_unfound() {
     done
 
     ceph pg dump pgs
-    ceph pg 2.0 list_missing | grep -q $testobj || return 1
+    ceph pg 2.0 list_unfound | grep -q $testobj || return 1
 
     # Command should hang because object is unfound
     timeout 5 rados -p $poolname get $testobj $dir/CHECK

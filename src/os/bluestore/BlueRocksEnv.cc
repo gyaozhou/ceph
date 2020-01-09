@@ -23,7 +23,7 @@ rocksdb::Status err_to_status(int r)
     return rocksdb::Status::IOError(strerror(r));
   default:
     // FIXME :(
-    assert(0 == "unrecognized error code");
+    ceph_abort_msg("unrecognized error code");
     return rocksdb::Status::NotSupported(rocksdb::Status::kNone);
   }
 }
@@ -48,7 +48,7 @@ class BlueRocksSequentialFile : public rocksdb::SequentialFile {
   // REQUIRES: External synchronization
   rocksdb::Status Read(size_t n, rocksdb::Slice* result, char* scratch) override {
     int r = fs->read(h, &h->buf, h->buf.pos, n, NULL, scratch);
-    assert(r >= 0);
+    ceph_assert(r >= 0);
     *result = rocksdb::Slice(scratch, r);
     return rocksdb::Status::OK();
   }
@@ -96,7 +96,7 @@ class BlueRocksRandomAccessFile : public rocksdb::RandomAccessFile {
   rocksdb::Status Read(uint64_t offset, size_t n, rocksdb::Slice* result,
 		       char* scratch) const override {
     int r = fs->read_random(h, offset, n, scratch);
-    assert(r >= 0);
+    ceph_assert(r >= 0);
     *result = rocksdb::Slice(scratch, r);
     return rocksdb::Status::OK();
   }
@@ -120,6 +120,12 @@ class BlueRocksRandomAccessFile : public rocksdb::RandomAccessFile {
     return snprintf(id, max_size, "%016llx",
 		    (unsigned long long)h->file->fnode.ino);
   };
+
+  // Readahead the file starting from offset by n bytes for caching.
+  rocksdb::Status Prefetch(uint64_t offset, size_t n) override {
+    fs->read(h, &h->buf, offset, n, nullptr, nullptr);
+    return rocksdb::Status::OK();
+  }
 
   //enum AccessPattern { NORMAL, RANDOM, SEQUENTIAL, WILLNEED, DONTNEED };
 
@@ -225,6 +231,10 @@ class BlueRocksWritableFile : public rocksdb::WritableFile {
   // uses direct IO.
   bool UseDirectIO() const {
     return false;
+  }
+
+  void SetWriteLifeTimeHint(rocksdb::Env::WriteLifeTimeHint hint) override {
+    h->write_hint = (const int)hint;
   }
 
   /*
@@ -391,7 +401,7 @@ rocksdb::Status BlueRocksEnv::NewDirectory(
   std::unique_ptr<rocksdb::Directory>* result)
 {
   if (!fs->dir_exists(name))
-    return rocksdb::Status::IOError(name, strerror(ENOENT));
+    return rocksdb::Status::NotFound(name, strerror(ENOENT));
   result->reset(new BlueRocksDirectory(fs));
   return rocksdb::Status::OK();
 }
@@ -414,7 +424,7 @@ rocksdb::Status BlueRocksEnv::GetChildren(
   result->clear();
   int r = fs->readdir(dir, result);
   if (r < 0)
-    return rocksdb::Status::IOError(dir, strerror(ENOENT));//    return err_to_status(r);
+    return rocksdb::Status::NotFound(dir, strerror(ENOENT));//    return err_to_status(r);
   return rocksdb::Status::OK();
 }
 
@@ -543,6 +553,7 @@ rocksdb::Status BlueRocksEnv::UnlockFile(rocksdb::FileLock* lock)
   if (r < 0)
     return err_to_status(r);
   delete lock;
+  lock = nullptr;
   return rocksdb::Status::OK();
 }
 

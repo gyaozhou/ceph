@@ -1,4 +1,5 @@
 import { Component } from '@angular/core';
+import { Icons } from '../../../shared/enum/icons.enum';
 
 @Component({
   selector: 'cd-loading-panel',
@@ -6,4 +7,5 @@ import { Component } from '@angular/core';
   styleUrls: ['./loading-panel.component.scss']
 })
 export class LoadingPanelComponent {
+  icons = Icons;
 }

@@ -37,7 +37,7 @@ void Entry::encode(bufferlist &bl) const {
   uint32_t bl_offset = bl.length();
   bl.claim_append(data_bl);
   encode(crc, bl);
-  assert(get_fixed_size() + m_data.length() + bl_offset == bl.length());
+  ceph_assert(get_fixed_size() + m_data.length() + bl_offset == bl.length());
 }
 
 void Entry::decode(bufferlist::const_iterator &iter) {
@@ -86,7 +86,14 @@ bool Entry::is_readable(bufferlist::const_iterator iter, uint32_t *bytes_needed)
   using ceph::decode;
   uint32_t start_off = iter.get_off();
   if (iter.get_remaining() < HEADER_FIXED_SIZE) {
-    *bytes_needed = HEADER_FIXED_SIZE - iter.get_remaining();
+    bufferlist sub_bl;
+    sub_bl.substr_of(iter.get_bl(), iter.get_off(), iter.get_remaining());
+    if (sub_bl.length() > 0 && sub_bl.is_zero()) {
+      // pad bytes
+      *bytes_needed = 0;
+    } else {
+      *bytes_needed = HEADER_FIXED_SIZE - iter.get_remaining();
+    }
     return false;
   }
   uint64_t bl_preamble;

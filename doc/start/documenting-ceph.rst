@@ -10,7 +10,7 @@ instructions will help the Ceph project immensely.
 
 The Ceph documentation source resides in the ``ceph/doc`` directory of the Ceph
 repository, and Python Sphinx renders the source into HTML and manpages. The
-http://ceph.com/docs link currenly displays the  ``master`` branch by default,
+http://ceph.com/docs link currently displays the  ``master`` branch by default,
 but you may view documentation for older branches (e.g., ``argonaut``) or future
 branches (e.g., ``next``) as well as work-in-progress branches by substituting
 ``master`` with the branch name you prefer.
@@ -31,7 +31,7 @@ steps:
 #. `Commit the Change`_
 #. `Push the Change`_
 #. `Make a Pull Request`_
-#. `Notify the Relevant Person`_
+#. `Notify Us`_
 
 Get the Source
 --------------
@@ -86,7 +86,7 @@ main components.
 - **Ceph Object Storage:** The Ceph Object Storage documentation resides under
   the ``doc/radosgw`` directory.
 
-- **Ceph Filesystem:** The Ceph Filesystem documentation resides under the 
+- **Ceph File System:** The Ceph File System documentation resides under the 
   ``doc/cephfs`` directory.
   
 - **Installation (Quick):** Quick start documentation resides under the
@@ -132,10 +132,11 @@ should be ``wip-doc-4000`` by convention and the relevant tracker URL will be
 http://tracker.ceph.com/issues/4000.
 
 .. note:: Please do not mingle documentation contributions and source code
-   contributions in a single pull request. Editors review the documentation
-   and engineers review source code changes. When you keep documentation 
-   pull requests separate from source code pull requests, it simplifies the 
-   process and we won't have to ask you to resubmit the requests separately.
+   contributions in a single commit. When you keep documentation
+   commits separate from source code commits, it simplifies the review
+   process. We highly recommend that any pull request that adds a feature or
+   a configuration option, should also include a documentation commit,
+   describing the relevant changes/options.
 
 Before you create your branch name, ensure that it doesn't already exist in the
 local or remote repository. ::
@@ -188,7 +189,7 @@ To build the documentation on Debian/Ubuntu, Fedora, or CentOS/RHEL, execute::
 
 	admin/build-doc
 
-To scan for the reachablity of external links, execute::
+To scan for the reachability of external links, execute::
 
 	admin/build-doc linkcheck
 
@@ -205,11 +206,12 @@ SHOULD fix warnings that are related to syntax you modified.
 .. important:: You must validate ALL HYPERLINKS. If a hyperlink is broken,
    it automatically breaks the build!
 
-Once you build the documentation set, you may navigate to the source directory
-to view it::
+Once you build the documentation set, you may start an HTTP server at
+``http://localhost:8080/`` to view it::
 
-	cd build-doc/output
+	admin/serve-doc
 
+You can also navigate to ``build-doc/output`` to inspect the built documents.
 There should be an ``html`` directory and a ``man`` directory containing
 documentation in HTML and manpage formats respectively.
 
@@ -446,11 +448,10 @@ Pull`_ approach.
 
 
 
-Notify the Relevant Person
---------------------------
+Notify Us
+---------
 
-After you make a pull request, notify the relevant person. For general
-documentation pull requests, notify `John Wilkins`_.
+After you make a pull request, please email ceph-docs@redhat.com.
 
 
 
@@ -589,9 +590,8 @@ improves the readability of the document in a command line interface.
 .. _ditaa: http://ditaa.sourceforge.net/
 .. _Document Title: http://docutils.sourceforge.net/docs/user/rst/quickstart.html#document-title-subtitle
 .. _Sections: http://docutils.sourceforge.net/docs/user/rst/quickstart.html#sections
-.. _Cross referencing arbitrary locations: http://sphinx-doc.org/markup/inline.html#ref-role
+.. _Cross referencing arbitrary locations: http://www.sphinx-doc.org/en/master/usage/restructuredtext/roles.html#role-ref
 .. _The TOC tree: http://sphinx-doc.org/markup/toctree.html
 .. _Showing code examples: http://sphinx-doc.org/markup/code.html
 .. _paragraph level markup: http://sphinx-doc.org/markup/para.html
 .. _topic directive: http://docutils.sourceforge.net/docs/ref/rst/directives.html#topic
-.. _John Wilkins: mailto:jowilkin@redhat.com

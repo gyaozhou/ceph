@@ -14,10 +14,10 @@
 
 #pragma once
 
-struct MTimeCheck2 : public Message
-{
-  static const int HEAD_VERSION = 1;
-  static const int COMPAT_VERSION = 1;
+class MTimeCheck2 : public Message {
+public:
+  static constexpr int HEAD_VERSION = 1;
+  static constexpr int COMPAT_VERSION = 1;
 
   enum {
     OP_PING = 1,
@@ -33,9 +33,9 @@ struct MTimeCheck2 : public Message
   map<int, double> skews;
   map<int, double> latencies;
 
-  MTimeCheck2() : Message(MSG_TIMECHECK2, HEAD_VERSION, COMPAT_VERSION) { }
+  MTimeCheck2() : Message{MSG_TIMECHECK2, HEAD_VERSION, COMPAT_VERSION} { }
   MTimeCheck2(int op) :
-    Message(MSG_TIMECHECK2, HEAD_VERSION, COMPAT_VERSION),
+    Message{MSG_TIMECHECK2, HEAD_VERSION, COMPAT_VERSION},
     op(op)
   { }
 
@@ -43,7 +43,7 @@ private:
   ~MTimeCheck2() override { }
 
 public:
-  const char *get_type_name() const override { return "time_check2"; }
+  std::string_view get_type_name() const override { return "time_check2"; }
   const char *get_op_name() const {
     switch (op) {
     case OP_PING: return "ping";
@@ -83,4 +83,7 @@ public:
     encode(skews, payload, features);
     encode(latencies, payload, features);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };

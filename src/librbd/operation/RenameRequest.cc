@@ -81,7 +81,7 @@ bool RenameRequest<I>::should_complete(int r) {
     return true;
   }
 
-  RWLock::RLocker owner_lock(image_ctx.owner_lock);
+  std::shared_lock owner_lock{image_ctx.owner_lock};
   switch (m_state) {
   case STATE_READ_SOURCE_HEADER:
     send_write_destination_header();
@@ -105,7 +105,7 @@ int RenameRequest<I>::filter_return_code(int r) const {
   CephContext *cct = image_ctx.cct;
 
   if (m_state == STATE_READ_SOURCE_HEADER && r == -ENOENT) {
-    RWLock::RLocker snap_locker(image_ctx.snap_lock);
+    std::shared_lock image_locker{image_ctx.image_lock};
     if (image_ctx.name == m_dest_name) {
       // signal that replay raced with itself
       return -EEXIST;
@@ -135,7 +135,7 @@ void RenameRequest<I>::send_read_source_header() {
   librados::AioCompletion *rados_completion = this->create_callback_completion();
   int r = image_ctx.md_ctx.aio_operate(m_source_oid, rados_completion, &op,
                                        &m_header_bl);
-  assert(r == 0);
+  ceph_assert(r == 0);
   rados_completion->release();
 }
 
@@ -152,7 +152,7 @@ void RenameRequest<I>::send_write_destination_header() {
 
   librados::AioCompletion *rados_completion = this->create_callback_completion();
   int r = image_ctx.md_ctx.aio_operate(m_dest_oid, rados_completion, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   rados_completion->release();
 }
 
@@ -180,7 +180,7 @@ void RenameRequest<I>::send_update_directory() {
 
   librados::AioCompletion *rados_completion = this->create_callback_completion();
   int r = image_ctx.md_ctx.aio_operate(RBD_DIRECTORY, rados_completion, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   rados_completion->release();
 }
 
@@ -196,7 +196,7 @@ void RenameRequest<I>::send_remove_source_header() {
 
   librados::AioCompletion *rados_completion = this->create_callback_completion();
   int r = image_ctx.md_ctx.aio_operate(m_source_oid, rados_completion, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   rados_completion->release();
 }
 

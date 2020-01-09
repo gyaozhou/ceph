@@ -9,7 +9,6 @@
 /node_modules
 
 # IDEs and editors
-/.idea
 .project
 .classpath
 .c9/
@@ -37,6 +36,7 @@ testem.log
 # e2e
 /e2e/*.js
 /e2e/*.map
+.protractor-fail-fast
 
 # System Files
 .DS_Store
@@ -44,7 +44,6 @@ Thumbs.db
 
 # Package lock files
 yarn.lock
-package-lock.json
 
 # Ceph
 !core

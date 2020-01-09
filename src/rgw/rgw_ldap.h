@@ -1,5 +1,5 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
 
 #ifndef RGW_LDAP_H
 #define RGW_LDAP_H
@@ -136,7 +136,7 @@ namespace rgw {
 #include "common/safe_io.h"
 #include <boost/algorithm/string.hpp>
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 std::string parse_rgw_ldap_bindpw(CephContext* ctx);
 

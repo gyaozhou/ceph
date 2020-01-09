@@ -39,24 +39,6 @@
 /* Define to 1 if you have the <execinfo.h> header file. */
 #cmakedefine HAVE_EXECINFO_H 1
 
-/* Define to 1 if the system has the type `__be16'. */
-#cmakedefine HAVE___BE16 1
-
-/* Define to 1 if the system has the type `__be32'. */
-#cmakedefine HAVE___BE32 1
-
-/* Define to 1 if the system has the type `__be64'. */
-#cmakedefine HAVE___BE64 1
-
-/* Define to 1 if the system has the type `__le16'. */
-#cmakedefine HAVE___LE16 1
-
-/* Define to 1 if the system has the type `__le32'. */
-#cmakedefine HAVE___LE32 1
-
-/* Define to 1 if the system has the type `__le64'. */
-#cmakedefine HAVE___LE64 1
-
 /* Define to 1 if the system has the type `__s16'. */
 #cmakedefine HAVE___S16 1
 
@@ -93,6 +75,12 @@
 /* Defined if you have libaio */
 #cmakedefine HAVE_LIBAIO
 
+/* Defined if you have liburing */
+#cmakedefine HAVE_LIBURING
+
+/* Defind if you have POSIX AIO */
+#cmakedefine HAVE_POSIXAIO
+
 /* Defined if OpenLDAP enabled */
 #cmakedefine HAVE_OPENLDAP
 
@@ -108,30 +96,18 @@
 /* DPDK conditional compilation */
 #cmakedefine HAVE_DPDK
 
-/* PMEM conditional compilation */
-#cmakedefine HAVE_PMEM
+/* PMEM_DEVICE (OSD) conditional compilation */
+#cmakedefine HAVE_BLUESTORE_PMEM
 
 /* Defined if LevelDB supports bloom filters */
 #cmakedefine HAVE_LEVELDB_FILTER_POLICY
 
 /* Define if you have tcmalloc */
 #cmakedefine HAVE_LIBTCMALLOC
-
-/* Define if you have jemalloc */
-#cmakedefine HAVE_LIBJEMALLOC
+#cmakedefine LIBTCMALLOC_MISSING_ALIGNED_ALLOC
 
 /* Define if have curl_multi_wait() */
 #cmakedefine HAVE_CURL_MULTI_WAIT 1
-
-/* Define if using NSS. */
-#cmakedefine USE_NSS
-
-/* Define if using OpenSSL. */
-#cmakedefine USE_OPENSSL
-
-/* Accelio conditional compilation */
-#cmakedefine HAVE_XIO
-
 
 /* AsyncMessenger RDMA conditional compilation */
 #cmakedefine HAVE_RDMA
@@ -144,6 +120,9 @@
 
 /* define if cephfs enabled */
 #cmakedefine WITH_CEPHFS
+
+/*define if GSSAPI/KRB5 enabled */
+#cmakedefine HAVE_GSSAPI
 
 /* define if rbd enabled */
 #cmakedefine WITH_RBD
@@ -177,6 +156,9 @@
 
 /* Define if you want to use LTTng */
 #cmakedefine WITH_LTTNG
+
+/* Define if you want to use EVENTTRACE */
+#cmakedefine WITH_EVENTTRACE
 
 /* Define if you want to OSD function instrumentation */
 #cmakedefine WITH_OSD_INSTRUMENT_FUNCTIONS
@@ -262,14 +244,11 @@
 /* Defined if you have libzfs enabled */
 #cmakedefine HAVE_LIBZFS
 
-/* Define if the C complier supports __func__ */
+/* Define if the C compiler supports __func__ */
 #cmakedefine HAVE_FUNC
 
-/* Define if the C complier supports __PRETTY_FUNCTION__ */
+/* Define if the C compiler supports __PRETTY_FUNCTION__ */
 #cmakedefine HAVE_PRETTY_FUNC
-
-/* F_SETPIPE_SZ is supported */
-#cmakedefine CEPH_HAVE_SETPIPE_SZ
 
 /* Have eventfd extension. */
 #cmakedefine HAVE_EVENTFD
@@ -299,7 +278,7 @@
 #cmakedefine HAVE_STATIC_CAST
 
 /* Version number of package */
-#cmakedefine VERSION "@VERSION@"
+#cmakedefine PROJECT_VERSION "@PROJECT_VERSION@"
 
 /* Defined if pthread_setname_np() is available */
 #cmakedefine HAVE_PTHREAD_SETNAME_NP 1
@@ -325,7 +304,7 @@
 /* Define if endian type is little endian */
 #cmakedefine CEPH_LITTLE_ENDIAN
 
-#cmakedefine PYTHON_EXECUTABLE "@MGR_PYTHON_EXECUTABLE@"
+#cmakedefine MGR_PYTHON_EXECUTABLE "@MGR_PYTHON_EXECUTABLE@"
 
 /* Define to 1 if you have the `getprogname' function. */
 #cmakedefine HAVE_GETPROGNAME 1
@@ -336,8 +315,17 @@
 /* Defined if boost::context is available */
 #cmakedefine HAVE_BOOST_CONTEXT
 
+/* Defined if libradosstriper is enabled: */
+#cmakedefine WITH_LIBRADOSSTRIPER
+
 /* Defined if OpenSSL is available for the rgw beast frontend */
 #cmakedefine WITH_RADOSGW_BEAST_OPENSSL
+
+/* Defined if rabbitmq-c is available for rgw amqp push endpoint */
+#cmakedefine WITH_RADOSGW_AMQP_ENDPOINT
+
+/* Defined if libedkafka is available for rgw kafka push endpoint */
+#cmakedefine WITH_RADOSGW_KAFKA_ENDPOINT
 
 /* Defined if std::map::merge() is supported */
 #cmakedefine HAVE_STDLIB_MAP_SPLICING
@@ -347,5 +335,11 @@
 
 /* Define if seastar is available. */
 #cmakedefine HAVE_SEASTAR
+
+/* Define if unit tests are built. */
+#cmakedefine UNIT_TESTS_BUILT
+
+/* Define if RWL is enabled */
+#cmakedefine WITH_RBD_RWL
 
 #endif /* CONFIG_H */

@@ -1,5 +1,6 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
+
 #ifndef CEPH_RGW_BASIC_TYPES_H
 #define CEPH_RGW_BASIC_TYPES_H
 
@@ -12,8 +13,7 @@ struct rgw_user {
   std::string id;
 
   rgw_user() {}
-  // cppcheck-suppress noExplicitConstructor
-  rgw_user(const std::string& s) {
+  explicit rgw_user(const std::string& s) {
     from_str(s);
   }
   rgw_user(const std::string& tenant, const std::string& id)
@@ -103,6 +103,8 @@ struct rgw_user {
     }
     return (id < rhs.id);
   }
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<rgw_user*>& o);
 };
 WRITE_CLASS_ENCODER(rgw_user)
 
@@ -115,15 +117,19 @@ WRITE_CLASS_ENCODER(rgw_user)
 namespace rgw {
 namespace auth {
 class Principal {
-  enum types { User, Role, Tenant, Wildcard };
+  enum types { User, Role, Tenant, Wildcard, OidcProvider };
   types t;
   rgw_user u;
+  string idp_url;
 
   explicit Principal(types t)
     : t(t) {}
 
   Principal(types t, std::string&& n, std::string i)
     : t(t), u(std::move(n), std::move(i)) {}
+
+  Principal(string&& idp_url)
+    : t(OidcProvider), idp_url(std::move(idp_url)) {}
 
 public:
 
@@ -143,6 +149,10 @@ public:
     return Principal(Tenant, std::move(t), {});
   }
 
+  static Principal oidc_provider(string&& idp_url) {
+    return Principal(std::move(idp_url));
+  }
+
   bool is_wildcard() const {
     return t == Wildcard;
   }
@@ -159,12 +169,20 @@ public:
     return t == Tenant;
   }
 
+  bool is_oidc_provider() const {
+    return t == OidcProvider;
+  }
+
   const std::string& get_tenant() const {
     return u.tenant;
   }
 
   const std::string& get_id() const {
     return u.id;
+  }
+
+  const string& get_idp_url() const {
+    return idp_url;
   }
 
   bool operator ==(const Principal& o) const {
@@ -184,6 +202,7 @@ class JSONObj;
 
 void decode_json_obj(rgw_user& val, JSONObj *obj);
 void encode_json(const char *name, const rgw_user& val, Formatter *f);
+void encode_xml(const char *name, const rgw_user& val, Formatter *f);
 
 inline ostream& operator<<(ostream& out, const rgw_user &u) {
   string s;

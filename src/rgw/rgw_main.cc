@@ -1,5 +1,6 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
+
 #include "common/ceph_argparse.h"
 #include "global/global_init.h"
 #include "global/signal_handler.h"
@@ -13,7 +14,6 @@
 #include "include/stringify.h"
 #include "rgw_common.h"
 #include "rgw_rados.h"
-#include "rgw_otp.h"
 #include "rgw_period_pusher.h"
 #include "rgw_realm_reloader.h"
 #include "rgw_rest.h"
@@ -25,9 +25,9 @@
 #include "rgw_rest_bucket.h"
 #include "rgw_rest_metadata.h"
 #include "rgw_rest_log.h"
-#include "rgw_rest_opstate.h"
 #include "rgw_rest_config.h"
 #include "rgw_rest_realm.h"
+#include "rgw_rest_sts.h"
 #include "rgw_swift_auth.h"
 #include "rgw_log.h"
 #include "rgw_tools.h"
@@ -36,9 +36,19 @@
 #include "rgw_process.h"
 #include "rgw_frontend.h"
 #include "rgw_http_client_curl.h"
+#include "rgw_perf_counters.h"
+#ifdef WITH_RADOSGW_AMQP_ENDPOINT
+#include "rgw_amqp.h"
+#endif
+#ifdef WITH_RADOSGW_KAFKA_ENDPOINT
+#include "rgw_kafka.h"
+#endif
 #if defined(WITH_RADOSGW_BEAST_FRONTEND)
 #include "rgw_asio_frontend.h"
 #endif /* WITH_RADOSGW_BEAST_FRONTEND */
+#include "rgw_dmclock_scheduler_ctx.h"
+
+#include "services/svc_zone.h"
 
 #ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
@@ -161,7 +171,7 @@ static RGWRESTMgr *rest_filter(RGWRados *store, int dialect, RGWRESTMgr *orig)
 /*
  * start up the RADOS connection and then handle HTTP messages as they come in
  */
-int main(int argc, const char **argv)
+int radosgw_Main(int argc, const char **argv)
 {
   // dout() messages will be sent to stderr, but FCGX wants messages on stdout
   // Redirect stderr to stdout.
@@ -176,7 +186,8 @@ int main(int argc, const char **argv)
   /* alternative default for module */
   map<string,string> defaults = {
     { "debug_rgw", "1/5" },
-    { "keyring", "$rgw_data/keyring" }
+    { "keyring", "$rgw_data/keyring" },
+    { "objecter_inflight_ops", "24576" }
   };
 
   vector<const char*> args;
@@ -197,8 +208,8 @@ int main(int argc, const char **argv)
     flags);
 
   list<string> frontends;
-  g_conf->early_expand_meta(g_conf->rgw_frontends, &cerr);
-  get_str_list(g_conf->rgw_frontends, ",", frontends);
+  g_conf().early_expand_meta(g_conf()->rgw_frontends, &cerr);
+  get_str_list(g_conf()->rgw_frontends, ",", frontends);
   multimap<string, RGWFrontendConfig *> fe_map;
   list<RGWFrontendConfig *> configs;
   if (frontends.empty()) {
@@ -207,16 +218,16 @@ int main(int argc, const char **argv)
   for (list<string>::iterator iter = frontends.begin(); iter != frontends.end(); ++iter) {
     string& f = *iter;
 
-    if (f.find("civetweb") != string::npos) {
-      // If civetweb is configured as a frontend, prevent global_init() from
+    if (f.find("civetweb") != string::npos || f.find("beast") != string::npos) {
+      // If civetweb or beast is configured as a frontend, prevent global_init() from
       // dropping permissions by setting the appropriate flag.
       flags |= CINIT_FLAG_DEFER_DROP_PRIVILEGES;
       if (f.find("port") != string::npos) {
         // check for the most common ws problems
         if ((f.find("port=") == string::npos) ||
             (f.find("port= ") != string::npos)) {
-          derr << "WARNING: civetweb frontend config found unexpected spacing around 'port' "
-               << "(ensure civetweb port parameter has the form 'port=80' with no spaces "
+          derr << "WARNING: radosgw frontend config found unexpected spacing around 'port' "
+               << "(ensure frontend port parameter has the form 'port=80' with no spaces "
                << "before or after '=')" << dendl;
         }
       }
@@ -245,36 +256,33 @@ int main(int argc, const char **argv)
 			 flags, "rgw_data", false);
 
   // maintain existing region root pool for new multisite objects
-  if (!g_conf->rgw_region_root_pool.empty()) {
-    const char *root_pool = g_conf->rgw_region_root_pool.c_str();
-    if (g_conf->rgw_zonegroup_root_pool.empty()) {
-      g_conf->set_val_or_die("rgw_zonegroup_root_pool", root_pool);
+  if (!g_conf()->rgw_region_root_pool.empty()) {
+    const char *root_pool = g_conf()->rgw_region_root_pool.c_str();
+    if (g_conf()->rgw_zonegroup_root_pool.empty()) {
+      g_conf().set_val_or_die("rgw_zonegroup_root_pool", root_pool);
     }
-    if (g_conf->rgw_period_root_pool.empty()) {
-      g_conf->set_val_or_die("rgw_period_root_pool", root_pool);
+    if (g_conf()->rgw_period_root_pool.empty()) {
+      g_conf().set_val_or_die("rgw_period_root_pool", root_pool);
     }
-    if (g_conf->rgw_realm_root_pool.empty()) {
-      g_conf->set_val_or_die("rgw_realm_root_pool", root_pool);
+    if (g_conf()->rgw_realm_root_pool.empty()) {
+      g_conf().set_val_or_die("rgw_realm_root_pool", root_pool);
     }
   }
 
   // for region -> zonegroup conversion (must happen before common_init_finish())
-  if (!g_conf->rgw_region.empty() && g_conf->rgw_zonegroup.empty()) {
-    g_conf->set_val_or_die("rgw_zonegroup", g_conf->rgw_region.c_str());
+  if (!g_conf()->rgw_region.empty() && g_conf()->rgw_zonegroup.empty()) {
+    g_conf().set_val_or_die("rgw_zonegroup", g_conf()->rgw_region.c_str());
   }
 
-  if (g_conf->daemonize) {
+  if (g_conf()->daemonize) {
     global_init_daemonize(g_ceph_context);
   }
-  Mutex mutex("main");
+  ceph::mutex mutex = ceph::make_mutex("main");
   SafeTimer init_timer(g_ceph_context, mutex);
   init_timer.init();
-  mutex.Lock();
-  init_timer.add_event_after(g_conf->rgw_init_timeout, new C_InitTimeout);
-  mutex.Unlock();
-
-  // Enable the perf counter before starting the service thread
-  g_ceph_context->enable_perf_counter();
+  mutex.lock();
+  init_timer.add_event_after(g_conf()->rgw_init_timeout, new C_InitTimeout);
+  mutex.unlock();
 
   common_init_finish(g_ceph_context);
 
@@ -298,14 +306,19 @@ int main(int argc, const char **argv)
   FCGX_Init();
 #endif
 
-  RGWRados *store = RGWStoreManager::get_storage(g_ceph_context,
-      g_conf->rgw_enable_gc_threads, g_conf->rgw_enable_lc_threads, g_conf->rgw_enable_quota_threads,
-      g_conf->rgw_run_sync_thread, g_conf->rgw_dynamic_resharding, g_conf->rgw_cache_enabled);
+  rgw::sal::RGWRadosStore *store =
+    RGWStoreManager::get_storage(g_ceph_context,
+				 g_conf()->rgw_enable_gc_threads,
+				 g_conf()->rgw_enable_lc_threads,
+				 g_conf()->rgw_enable_quota_threads,
+				 g_conf()->rgw_run_sync_thread,
+				 g_conf().get_val<bool>("rgw_dynamic_resharding"),
+				 g_conf()->rgw_cache_enabled);
   if (!store) {
-    mutex.Lock();
+    mutex.lock();
     init_timer.cancel_all_events();
     init_timer.shutdown();
-    mutex.Unlock();
+    mutex.unlock();
 
     derr << "Couldn't init storage provider (RADOS)" << dendl;
     return EIO;
@@ -316,37 +329,43 @@ int main(int argc, const char **argv)
     return -r;
   }
 
-  rgw_rest_init(g_ceph_context, store, store->get_zonegroup());
+  rgw_rest_init(g_ceph_context, store->svc()->zone->get_zonegroup());
 
-  mutex.Lock();
+  mutex.lock();
   init_timer.cancel_all_events();
   init_timer.shutdown();
-  mutex.Unlock();
+  mutex.unlock();
 
-  rgw_user_init(store);
-  rgw_bucket_init(store->meta_mgr);
-  rgw_otp_init(store);
-  rgw_log_usage_init(g_ceph_context, store);
+  rgw_log_usage_init(g_ceph_context, store->getRados());
 
   RGWREST rest;
 
   list<string> apis;
 
-  get_str_list(g_conf->rgw_enable_apis, apis);
+  get_str_list(g_conf()->rgw_enable_apis, apis);
 
   map<string, bool> apis_map;
   for (list<string>::iterator li = apis.begin(); li != apis.end(); ++li) {
     apis_map[*li] = true;
   }
 
+  /* warn about insecure keystone secret config options */
+  if (!(g_ceph_context->_conf->rgw_keystone_admin_token.empty() ||
+	g_ceph_context->_conf->rgw_keystone_admin_password.empty())) {
+    dout(0) << "WARNING: rgw_keystone_admin_token and rgw_keystone_admin_password should be avoided as they can expose secrets.  Prefer the new rgw_keystone_admin_token_path and rgw_keystone_admin_password_path options, which read their secrets from files." << dendl;
+  }
+
   // S3 website mode is a specialization of S3
   const bool s3website_enabled = apis_map.count("s3website") > 0;
+  const bool sts_enabled = apis_map.count("sts") > 0;
+  const bool iam_enabled = apis_map.count("iam") > 0;
+  const bool pubsub_enabled = apis_map.count("pubsub") > 0;
   // Swift API entrypoint could placed in the root instead of S3
-  const bool swift_at_root = g_conf->rgw_swift_url_prefix == "/";
+  const bool swift_at_root = g_conf()->rgw_swift_url_prefix == "/";
   if (apis_map.count("s3") > 0 || s3website_enabled) {
     if (! swift_at_root) {
-      rest.register_default_mgr(set_logging(rest_filter(store, RGW_REST_S3,
-                                                        new RGWRESTMgr_S3(s3website_enabled))));
+      rest.register_default_mgr(set_logging(rest_filter(store->getRados(), RGW_REST_S3,
+                                                        new RGWRESTMgr_S3(s3website_enabled, sts_enabled, iam_enabled, pubsub_enabled))));
     } else {
       derr << "Cannot have the S3 or S3 Website enabled together with "
            << "Swift API placed in the root of hierarchy" << dendl;
@@ -354,10 +373,23 @@ int main(int argc, const char **argv)
     }
   }
 
+  if (pubsub_enabled) {
+#ifdef WITH_RADOSGW_AMQP_ENDPOINT
+    if (!rgw::amqp::init(cct.get())) {
+        dout(1) << "ERROR: failed to initialize AMQP manager" << dendl;
+    }
+#endif
+#ifdef WITH_RADOSGW_KAFKA_ENDPOINT
+    if (!rgw::kafka::init(cct.get())) {
+        dout(1) << "ERROR: failed to initialize Kafka manager" << dendl;
+    }
+#endif
+  }
+
   if (apis_map.count("swift") > 0) {
     RGWRESTMgr_SWIFT* const swift_resource = new RGWRESTMgr_SWIFT;
 
-    if (! g_conf->rgw_cross_domain_policy.empty()) {
+    if (! g_conf()->rgw_cross_domain_policy.empty()) {
       swift_resource->register_resource("crossdomain.xml",
                           set_logging(new RGWRESTMgr_SWIFT_CrossDomain));
     }
@@ -369,11 +401,11 @@ int main(int argc, const char **argv)
                           set_logging(new RGWRESTMgr_SWIFT_Info));
 
     if (! swift_at_root) {
-      rest.register_resource(g_conf->rgw_swift_url_prefix,
-                          set_logging(rest_filter(store, RGW_REST_SWIFT,
+      rest.register_resource(g_conf()->rgw_swift_url_prefix,
+                          set_logging(rest_filter(store->getRados(), RGW_REST_SWIFT,
                                                   swift_resource)));
     } else {
-      if (store->get_zonegroup().zones.size() > 1) {
+      if (store->svc()->zone->get_zonegroup().zones.size() > 1) {
         derr << "Placing Swift API in the root of URL hierarchy while running"
              << " multi-site configuration requires another instance of RadosGW"
              << " with S3 API enabled!" << dendl;
@@ -384,7 +416,7 @@ int main(int argc, const char **argv)
   }
 
   if (apis_map.count("swift_auth") > 0) {
-    rest.register_resource(g_conf->rgw_swift_auth_entry,
+    rest.register_resource(g_conf()->rgw_swift_auth_entry,
                set_logging(new RGWRESTMgr_SWIFT_Auth));
   }
 
@@ -397,25 +429,36 @@ int main(int argc, const char **argv)
     /*Registering resource for /admin/metadata */
     admin_resource->register_resource("metadata", new RGWRESTMgr_Metadata);
     admin_resource->register_resource("log", new RGWRESTMgr_Log);
-    admin_resource->register_resource("opstate", new RGWRESTMgr_Opstate);
     admin_resource->register_resource("config", new RGWRESTMgr_Config);
     admin_resource->register_resource("realm", new RGWRESTMgr_Realm);
-    rest.register_resource(g_conf->rgw_admin_entry, admin_resource);
+    rest.register_resource(g_conf()->rgw_admin_entry, admin_resource);
   }
 
   /* Initialize the registry of auth strategies which will coordinate
    * the dynamic reconfiguration. */
+  rgw::auth::ImplicitTenants implicit_tenant_context{g_conf()};
+  g_conf().add_observer(&implicit_tenant_context);
   auto auth_registry = \
-    rgw::auth::StrategyRegistry::create(g_ceph_context, store);
+    rgw::auth::StrategyRegistry::create(g_ceph_context, implicit_tenant_context, store->getRados()->pctl);
 
   /* Header custom behavior */
-  rest.register_x_headers(g_conf->rgw_log_http_headers);
+  rest.register_x_headers(g_conf()->rgw_log_http_headers);
+
+  if (cct->_conf.get_val<std::string>("rgw_scheduler_type") == "dmclock" &&
+      !cct->check_experimental_feature_enabled("dmclock")){
+    derr << "dmclock scheduler type is experimental and needs to be"
+	 << "set in the option enable experimental data corrupting features"
+	 << dendl;
+    return EINVAL;
+  }
+
+  rgw::dmclock::SchedulerCtx sched_ctx{cct.get()};
 
   OpsLogSocket *olog = NULL;
 
-  if (!g_conf->rgw_ops_log_socket_path.empty()) {
-    olog = new OpsLogSocket(g_ceph_context, g_conf->rgw_ops_log_data_backlog);
-    olog->init(g_conf->rgw_ops_log_socket_path);
+  if (!g_conf()->rgw_ops_log_socket_path.empty()) {
+    olog = new OpsLogSocket(g_ceph_context, g_conf()->rgw_ops_log_data_backlog);
+    olog->init(g_conf()->rgw_ops_log_socket_path);
   }
 
   r = signal_fd_init();
@@ -448,8 +491,9 @@ int main(int argc, const char **argv)
       config->get_val("prefix", "", &uri_prefix);
 
       RGWProcessEnv env = { store, &rest, olog, 0, uri_prefix, auth_registry };
+      //TODO: move all of scheduler initializations to frontends?
 
-      fe = new RGWCivetWebFrontend(env, config);
+      fe = new RGWCivetWebFrontend(env, config, sched_ctx);
     }
     else if (framework == "loadgen") {
       int port;
@@ -468,7 +512,7 @@ int main(int argc, const char **argv)
       std::string uri_prefix;
       config->get_val("prefix", "", &uri_prefix);
       RGWProcessEnv env{ store, &rest, olog, port, uri_prefix, auth_registry };
-      fe = new RGWAsioFrontend(env, config);
+      fe = new RGWAsioFrontend(env, config, sched_ctx);
     }
 #endif /* WITH_RADOSGW_BEAST_FRONTEND */
 #if defined(WITH_RADOSGW_FCGI_FRONTEND)
@@ -505,7 +549,7 @@ int main(int argc, const char **argv)
     fes.push_back(fe);
   }
 
-  r = store->register_to_service_map("rgw", service_map_meta);
+  r = store->getRados()->register_to_service_map("rgw", service_map_meta);
   if (r < 0) {
     derr << "ERROR: failed to register to service map: " << cpp_strerror(-r) << dendl;
 
@@ -515,10 +559,10 @@ int main(int argc, const char **argv)
 
   // add a watcher to respond to realm configuration changes
   RGWPeriodPusher pusher(store);
-  RGWFrontendPauser pauser(fes, &pusher);
+  RGWFrontendPauser pauser(fes, implicit_tenant_context, &pusher);
   RGWRealmReloader reloader(store, service_map_meta, &pauser);
 
-  RGWRealmWatcher realm_watcher(g_ceph_context, store->realm);
+  RGWRealmWatcher realm_watcher(g_ceph_context, store->svc()->zone->get_realm());
   realm_watcher.add_watcher(RGWRealmNotify::Reload, reloader);
   realm_watcher.add_watcher(RGWRealmNotify::ZonesNeedPeriod, pusher);
 
@@ -567,6 +611,13 @@ int main(int argc, const char **argv)
   rgw_shutdown_resolver();
   rgw_http_client_cleanup();
   rgw::curl::cleanup_curl();
+  g_conf().remove_observer(&implicit_tenant_context);
+#ifdef WITH_RADOSGW_AMQP_ENDPOINT
+  rgw::amqp::shutdown();
+#endif
+#ifdef WITH_RADOSGW_KAFKA_ENDPOINT
+  rgw::kafka::shutdown();
+#endif
 
   rgw_perf_stop(g_ceph_context);
 
@@ -576,3 +627,13 @@ int main(int argc, const char **argv)
 
   return 0;
 }
+
+extern "C" {
+
+int radosgw_main(int argc, const char** argv)
+{
+  return radosgw_Main(argc, argv);
+}
+
+} /* extern "C" */
+

@@ -1,21 +1,22 @@
 import { Directive, ElementRef, HostListener, Input, OnInit, Renderer2 } from '@angular/core';
 
-import { ToastsManager } from 'ng2-toastr';
+import { ToastrService } from 'ngx-toastr';
 
 @Directive({
   selector: '[cdCopy2ClipboardButton]'
 })
 export class Copy2ClipboardButtonDirective implements OnInit {
+  @Input()
+  private cdCopy2ClipboardButton: string;
 
-  @Input('cdCopy2ClipboardButton') private cdCopy2ClipboardButton: string;
-
-  constructor(private elementRef: ElementRef,
-              private renderer: Renderer2,
-              private toastr: ToastsManager) {}
+  constructor(
+    private elementRef: ElementRef,
+    private renderer: Renderer2,
+    private toastr: ToastrService
+  ) {}
 
   ngOnInit() {
     const iElement = this.renderer.createElement('i');
-    this.renderer.addClass(iElement, 'icon-prepend');
     this.renderer.addClass(iElement, 'fa');
     this.renderer.addClass(iElement, 'fa-clipboard');
     this.renderer.appendChild(this.elementRef.nativeElement, iElement);

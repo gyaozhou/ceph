@@ -1,7 +1,13 @@
 import { Component, OnInit } from '@angular/core';
 
+import { PrometheusService } from '../../../shared/api/prometheus.service';
+import { Icons } from '../../../shared/enum/icons.enum';
 import { Permissions } from '../../../shared/models/permissions';
 import { AuthStorageService } from '../../../shared/services/auth-storage.service';
+import {
+  FeatureTogglesMap$,
+  FeatureTogglesService
+} from '../../../shared/services/feature-toggles.service';
 import { SummaryService } from '../../../shared/services/summary.service';
 
 @Component({
@@ -12,18 +18,34 @@ import { SummaryService } from '../../../shared/services/summary.service';
 export class NavigationComponent implements OnInit {
   permissions: Permissions;
   summaryData: any;
+  icons = Icons;
   isCollapsed = true;
+  isAlertmanagerConfigured = false;
+  isPrometheusConfigured = false;
+  enabledFeature$: FeatureTogglesMap$;
 
   constructor(
     private authStorageService: AuthStorageService,
-    private summaryService: SummaryService
+    private prometheusService: PrometheusService,
+    private summaryService: SummaryService,
+    private featureToggles: FeatureTogglesService
   ) {
     this.permissions = this.authStorageService.getPermissions();
+    this.enabledFeature$ = this.featureToggles.get();
   }
 
   ngOnInit() {
-    this.summaryService.summaryData$.subscribe((data: any) => {
+    this.summaryService.subscribe((data: any) => {
+      if (!data) {
+        return;
+      }
       this.summaryData = data;
+    });
+    this.prometheusService.ifAlertmanagerConfigured(() => {
+      this.isAlertmanagerConfigured = true;
+    });
+    this.prometheusService.ifPrometheusConfigured(() => {
+      this.isPrometheusConfigured = true;
     });
   }
 

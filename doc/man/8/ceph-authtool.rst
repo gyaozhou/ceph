@@ -17,7 +17,6 @@ Synopsis
   [ --gen-print-key ]
   [ --import-keyring *otherkeyringfile* ]
   [ -n | --name *entityname* ]
-  [ -u | --set-uid *auid* ]
   [ -a | --add-key *base64_key* ]
   [ --cap *subsystem* *capability* ]
   [ --caps *capfile* ]
@@ -71,10 +70,6 @@ Options
 .. option:: -n, --name *name*
 
    specify entityname to operate on
-
-.. option:: -u, --set-uid *auid*
-
-   sets the auid (authenticated user id) for the specified entityname
 
 .. option:: -a, --add-key *base64_key*
 
@@ -184,7 +179,7 @@ To create a new keyring containing a key for client.foo with a 0644 file mode::
         ceph-authtool -C -n client.foo --gen-key keyring --mode 0644
 
 To associate some capabilities with the key (namely, the ability to
-mount a Ceph filesystem)::
+mount a Ceph file system)::
 
         ceph-authtool -n client.foo --cap mds 'allow' --cap osd 'allow rw pool=data' --cap mon 'allow r' keyring
 

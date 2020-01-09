@@ -146,7 +146,7 @@ for storing file system data using the ``ceph fs add_data_pool`` command.
 First, create the pool. In this example we create the ``hadoop1`` pool with
 replication factor 1. ::
 
-    ceph osd pool create hadoop1 100
+    ceph osd pool create hadoop1
     ceph osd pool set hadoop1 size 1
 
 Next, determine the pool id. This can be done by examining the output of the
@@ -159,7 +159,7 @@ The output should resemble::
 
     pool 3 'hadoop1' rep size 1 min_size 1 crush_rule 0...
 
-where ``3`` is the pool id. Next we will use the pool id reference to register
+Where ``3`` is the pool id. Next we will use the pool id reference to register
 the pool as a data pool for storing file system data. ::
 
     ceph fs add_data_pool cephfs 3

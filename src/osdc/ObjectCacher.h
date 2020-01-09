@@ -179,12 +179,12 @@ class ObjectCacher {
 
     // reference counting
     int get() {
-      assert(ref >= 0);
+      ceph_assert(ref >= 0);
       if (ref == 0) lru_pin();
       return ++ref;
     }
     int put() {
-      assert(ref > 0);
+      ceph_assert(ref > 0);
       if (ref == 1) lru_unpin();
       --ref;
       return ref;
@@ -247,7 +247,7 @@ class ObjectCacher {
     map<loff_t, BufferHead*>     data;
 
     ceph_tid_t last_write_tid;  // version of bh (if non-zero)
-    ceph_tid_t last_commit_tid; // last update commited.
+    ceph_tid_t last_commit_tid; // last update committed.
 
     int dirty_or_tx;
 
@@ -271,9 +271,9 @@ class ObjectCacher {
     }
     ~Object() {
       reads.clear();
-      assert(ref == 0);
-      assert(data.empty());
-      assert(dirty_or_tx == 0);
+      ceph_assert(ref == 0);
+      ceph_assert(data.empty());
+      ceph_assert(dirty_or_tx == 0);
       set_item.remove_myself();
     }
 
@@ -289,8 +289,8 @@ class ObjectCacher {
 
     bool can_close() const {
       if (lru_is_expireable()) {
-	assert(data.empty());
-	assert(waitfor_commit.empty());
+	ceph_assert(data.empty());
+	ceph_assert(waitfor_commit.empty());
 	return true;
       }
       return false;
@@ -326,11 +326,11 @@ class ObjectCacher {
     void add_bh(BufferHead *bh) {
       if (data.empty())
 	get();
-      assert(data.count(bh->start()) == 0);
+      ceph_assert(data.count(bh->start()) == 0);
       data[bh->start()] = bh;
     }
     void remove_bh(BufferHead *bh) {
-      assert(data.count(bh->start()));
+      ceph_assert(data.count(bh->start()));
       data.erase(bh->start());
       if (data.empty())
 	put();
@@ -343,6 +343,7 @@ class ObjectCacher {
     void merge_left(BufferHead *left, BufferHead *right);
     bool can_merge_bh(BufferHead *left, BufferHead *right);
     void try_merge_bh(BufferHead *bh);
+    void maybe_rebuild_buffer(BufferHead *bh);
 
     bool is_cached(loff_t off, loff_t len) const;
     bool include_all_cached_data(loff_t off, loff_t len);
@@ -359,12 +360,12 @@ class ObjectCacher {
 
     // reference counting
     int get() {
-      assert(ref >= 0);
+      ceph_assert(ref >= 0);
       if (ref == 0) lru_pin();
       return ++ref;
     }
     int put() {
-      assert(ref > 0);
+      ceph_assert(ref > 0);
       if (ref == 1) lru_unpin();
       --ref;
       return ref;
@@ -399,7 +400,7 @@ class ObjectCacher {
   bool scattered_write;
 
   string name;
-  Mutex& lock;
+  ceph::mutex& lock;
 
   uint64_t max_dirty, target_dirty, max_size, max_objects;
   ceph::timespan max_dirty_age;
@@ -421,7 +422,7 @@ class ObjectCacher {
   LRU   bh_lru_dirty, bh_lru_rest;
   LRU   ob_lru;
 
-  Cond flusher_cond;
+  ceph::condition_variable flusher_cond;
   bool flusher_stop;
   void flusher_entry();
   class FlusherThread : public Thread {
@@ -451,7 +452,7 @@ class ObjectCacher {
   void close_object(Object *ob);
 
   // bh stats
-  Cond  stat_cond;
+  ceph::condition_variable  stat_cond;
 
   loff_t stat_clean;
   loff_t stat_zero;
@@ -553,7 +554,7 @@ class ObjectCacher {
   void purge(Object *o);
 
   int64_t reads_outstanding;
-  Cond read_cond;
+  ceph::condition_variable read_cond;
 
   int _readx(OSDRead *rd, ObjectSet *oset, Context *onfinish,
 	     bool external_call, ZTracer::Trace *trace);
@@ -576,7 +577,7 @@ class ObjectCacher {
 
 
 
-  ObjectCacher(CephContext *cct_, string name, WritebackHandler& wb, Mutex& l,
+  ObjectCacher(CephContext *cct_, string name, WritebackHandler& wb, ceph::mutex& l,
 	       flush_set_callback_t flush_callback,
 	       void *flush_callback_arg,
 	       uint64_t max_bytes, uint64_t max_objects,
@@ -588,11 +589,11 @@ class ObjectCacher {
     flusher_thread.create("flusher");
   }
   void stop() {
-    assert(flusher_thread.is_started());
-    lock.Lock();  // hmm.. watch out for deadlock!
+    ceph_assert(flusher_thread.is_started());
+    lock.lock();  // hmm.. watch out for deadlock!
     flusher_stop = true;
-    flusher_cond.Signal();
-    lock.Unlock();
+    flusher_cond.notify_all();
+    lock.unlock();
     flusher_thread.join();
   }
 
@@ -617,7 +618,7 @@ private:
   // write blocking
   int _wait_for_write(OSDWrite *wr, uint64_t len, ObjectSet *oset,
                       ZTracer::Trace *trace, Context *onfreespace);
-  void maybe_wait_for_writeback(uint64_t len, ZTracer::Trace *trace);
+  void _maybe_wait_for_writeback(uint64_t len, ZTracer::Trace *trace);
   bool _flush_set_finish(C_GatherBuilder *gather, Context *onfinish);
 
   void _discard(ObjectSet *oset, const vector<ObjectExtent>& exls,
@@ -697,7 +698,7 @@ public:
     OSDWrite *wr = prepare_write(snapc, bl, mtime, flags, 0);
     Striper::file_to_extents(cct, oset->ino, layout, offset, len,
 			     oset->truncate_size, wr->extents);
-    return writex(wr, oset, NULL);
+    return writex(wr, oset, nullptr);
   }
 
   bool file_flush(ObjectSet *oset, file_layout_t *layout,

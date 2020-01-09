@@ -1,7 +1,8 @@
 import { Component, ElementRef, OnChanges, OnInit, SimpleChanges, ViewChild } from '@angular/core';
 import { Input } from '@angular/core';
 
-import { ChartTooltip } from '../../../shared/models/chart-tooltip';
+import { ChartTooltip } from '../../models/chart-tooltip';
+import { DimlessBinaryPipe } from '../../pipes/dimless-binary.pipe';
 
 @Component({
   selector: 'cd-sparkline',
@@ -9,15 +10,20 @@ import { ChartTooltip } from '../../../shared/models/chart-tooltip';
   styleUrls: ['./sparkline.component.scss']
 })
 export class SparklineComponent implements OnInit, OnChanges {
-  @ViewChild('sparkCanvas') chartCanvasRef: ElementRef;
-  @ViewChild('sparkTooltip') chartTooltipRef: ElementRef;
+  @ViewChild('sparkCanvas', { static: true })
+  chartCanvasRef: ElementRef;
+  @ViewChild('sparkTooltip', { static: true })
+  chartTooltipRef: ElementRef;
 
-  @Input() data: any;
+  @Input()
+  data: any;
   @Input()
   style = {
     height: '30px',
     width: '100px'
   };
+  @Input()
+  isBinary: boolean;
 
   public colors: Array<any> = [
     {
@@ -48,7 +54,17 @@ export class SparklineComponent implements OnInit, OnChanges {
       enabled: false,
       mode: 'index',
       intersect: false,
-      custom: undefined
+      custom: undefined,
+      callbacks: {
+        label: (tooltipItem) => {
+          if (this.isBinary) {
+            return this.dimlessBinaryPipe.transform(tooltipItem.yLabel);
+          } else {
+            return tooltipItem.yLabel;
+          }
+        },
+        title: () => ''
+      }
     },
     scales: {
       yAxes: [
@@ -72,11 +88,11 @@ export class SparklineComponent implements OnInit, OnChanges {
 
   public labels: Array<any> = [];
 
-  constructor() {}
+  constructor(private dimlessBinaryPipe: DimlessBinaryPipe) {}
 
   ngOnInit() {
-    const getStyleTop = (tooltip, positionY) => {
-      return (tooltip.caretY - tooltip.height - tooltip.yPadding - 5) + 'px';
+    const getStyleTop = (tooltip) => {
+      return tooltip.caretY - tooltip.height - tooltip.yPadding - 5 + 'px';
     };
 
     const getStyleLeft = (tooltip, positionX) => {
@@ -95,14 +111,13 @@ export class SparklineComponent implements OnInit, OnChanges {
       borderColor: this.colors[0].pointBorderColor
     };
 
-    this.options.tooltips.custom = tooltip => {
+    this.options.tooltips.custom = (tooltip) => {
       chartTooltip.customTooltips(tooltip);
     };
   }
 
   ngOnChanges(changes: SimpleChanges) {
     this.datasets[0].data = changes['data'].currentValue;
-    this.datasets = [...this.datasets];
     this.labels = [...Array(changes['data'].currentValue.length)];
   }
 }

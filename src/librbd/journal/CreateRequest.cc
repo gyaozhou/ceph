@@ -3,7 +3,7 @@
 
 #include "common/dout.h"
 #include "common/errno.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "librbd/Utils.h"
 #include "common/Timer.h"
 #include "common/WorkQueue.h"
@@ -72,6 +72,7 @@ void CreateRequest<I>::get_pool_id() {
     complete(r);
     return;
   }
+  data_ioctx.set_namespace(m_ioctx.get_namespace());
 
   m_pool_id = data_ioctx.get_id();
   create_journal();
@@ -82,8 +83,8 @@ void CreateRequest<I>::create_journal() {
   ldout(m_cct, 20) << this << " " << __func__ << dendl;
 
   ImageCtx::get_timer_instance(m_cct, &m_timer, &m_timer_lock);
-  m_journaler = new Journaler(m_op_work_queue, m_timer, m_timer_lock,
-                              m_ioctx, m_image_id, m_image_client_id, {});
+  m_journaler = new Journaler(m_op_work_queue, m_timer, m_timer_lock, m_ioctx,
+                              m_image_id, m_image_client_id, {}, nullptr);
 
   using klass = CreateRequest<I>;
   Context *ctx = create_context_callback<klass, &klass::handle_create_journal>(this);

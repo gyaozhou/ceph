@@ -17,28 +17,74 @@
 
 #######################################################################
 
+function distro_id() {
+    source /etc/os-release
+    echo $ID
+}
+
+function distro_version() {
+    source /etc/os-release
+    echo $VERSION
+}
+
 function install() {
     for package in "$@" ; do
         install_one $package
     done
-    return 0
 }
 
 function install_one() {
-    case $(lsb_release -si) in
-        Ubuntu|Debian|Devuan)
-            sudo apt-get install -y "$@"
+    case $(distro_id) in
+        ubuntu|debian|devuan)
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
             ;;
-        CentOS|Fedora|RedHatEnterpriseServer)
+        centos|fedora|rhel)
             sudo yum install -y "$@"
             ;;
-        *SUSE*)
+        opensuse*|suse|sles)
             sudo zypper --non-interactive install "$@"
             ;;
         *)
-            echo "$(lsb_release -si) is unknown, $@ will have to be installed manually."
+            echo "$(distro_id) is unknown, $@ will have to be installed manually."
             ;;
     esac
+}
+
+function install_cmake3_on_xenial {
+    install_pkg_on_ubuntu \
+	ceph-cmake \
+	d278b9d28de0f6b88f56dfe1e8bf684a41577210 \
+	xenial \
+	force \
+	cmake
+}
+
+function install_pkg_on_ubuntu {
+    local project=$1
+    shift
+    local sha1=$1
+    shift
+    local codename=$1
+    shift
+    local force=$1
+    shift
+    local pkgs=$@
+    local missing_pkgs
+    if [ $force = "force" ]; then
+	missing_pkgs="$@"
+    else
+	for pkg in $pkgs; do
+	    if ! dpkg -s $pkg &> /dev/null; then
+		missing_pkgs+=" $pkg"
+	    fi
+	done
+    fi
+    if test -n "$missing_pkgs"; then
+	local shaman_url="https://shaman.ceph.com/api/repos/${project}/master/${sha1}/ubuntu/${codename}/repo"
+	sudo curl --silent --location $shaman_url --output /etc/apt/sources.list.d/$project.list
+	sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y -o Acquire::Languages=none -o Acquire::Translation=none || true
+	sudo env DEBIAN_FRONTEND=noninteractive apt-get install --allow-unauthenticated -y $missing_pkgs
+    fi
 }
 
 #######################################################################

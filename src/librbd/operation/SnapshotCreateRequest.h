@@ -40,13 +40,16 @@ public:
    *   . . . > STATE_ALLOCATE_SNAP_ID                    *
    *   .           |                                     *
    *   .           v                                     *
-   *   . . . . STATE_CREATE_SNAP * * * * * * * * * *     *
-   *               |                               *     *
-   *               v                               *     *
-   *           STATE_CREATE_OBJECT_MAP (skip if    *     *
-   *               |                    disabled)  *     *
-   *               |                               *     *
-   *               |                               v     *
+   *   . . . . STATE_CREATE_SNAP * * * * * * * * * * *   *
+   *               |                                 *   *
+   *               v                                 *   *
+   *           STATE_CREATE_OBJECT_MAP (skip if      *   *
+   *               |                    disabled)    *   *
+   *               v                                 *   *
+   *           STATE_CREATE_IMAGE_STATE (skip if     *   *
+   *               |                     not mirror  *   *
+   *               |                     snapshot)   *   *
+   *               |                                 v   *
    *               |              STATE_RELEASE_SNAP_ID  *
    *               |                     |               *
    *               |                     v               *
@@ -86,7 +89,7 @@ private:
 
   uint64_t m_snap_id;
   uint64_t m_size;
-  ParentInfo m_parent_info;
+  ParentImageInfo m_parent_info;
 
   void send_suspend_requests();
   Context *handle_suspend_requests(int *result);
@@ -105,6 +108,9 @@ private:
 
   Context *send_create_object_map();
   Context *handle_create_object_map(int *result);
+
+  Context *send_create_image_state();
+  Context *handle_create_image_state(int *result);
 
   void send_release_snap_id();
   Context *handle_release_snap_id(int *result);

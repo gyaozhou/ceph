@@ -26,6 +26,8 @@ function run() {
     export CEPH_ARGS
     CEPH_ARGS+="--fsid=$(uuidgen) --auth-supported=none "
     CEPH_ARGS+="--mon-host=$CEPH_MON "
+    # so we will not force auth_log_shard to be acting_primary
+    CEPH_ARGS+="--osd_force_auth_primary_missing_objects=1000000 "
     export margin=10
     export objects=200
     export poolname=test
@@ -54,9 +56,9 @@ function above_margin() {
     return $(( $check >= $target && $check <= $target + $margin ? 0 : 1 ))
 }
 
-FIND_UPACT='grep "pg[[]${PG}.*recovering.*_update_calc_stats " $log | tail -1 | sed "s/.*[)] \([[][^ p]*\).*$/\1/"'
-FIND_FIRST='grep "pg[[]${PG}.*recovering.*_update_calc_stats $which " $log | grep -F " ${UPACT}${addp}" | grep -v est | head -1 | sed "s/.* \([0-9]*\)$/\1/"'
-FIND_LAST='grep "pg[[]${PG}.*recovering.*_update_calc_stats $which " $log | tail -1 | sed "s/.* \([0-9]*\)$/\1/"'
+FIND_UPACT='grep "pg[[]${PG}.*recovering.*update_calc_stats " $log | tail -1 | sed "s/.*[)] \([[][^ p]*\).*$/\1/"'
+FIND_FIRST='grep "pg[[]${PG}.*recovering.*update_calc_stats $which " $log | grep -F " ${UPACT}${addp}" | grep -v est | head -1 | sed "s/.* \([0-9]*\)$/\1/"'
+FIND_LAST='grep "pg[[]${PG}.*recovering.*update_calc_stats $which " $log | tail -1 | sed "s/.* \([0-9]*\)$/\1/"'
 
 function check() {
     local dir=$1
@@ -282,12 +284,12 @@ function TEST_recovery_sizedown() {
     local log=$dir/osd.${primary}.log
     check $dir $PG $primary replicated 0 0 $misplaced 0 || return 1
 
-    UPACT=$(grep "pg[[]${PG}.*recovering.*_update_calc_stats " $log | tail -1 | sed "s/.*[)] \([[][^ p]*\).*$/\1/")
+    UPACT=$(grep "pg[[]${PG}.*recovering.*update_calc_stats " $log | tail -1 | sed "s/.*[)] \([[][^ p]*\).*$/\1/")
 
     # This is the value of set into MISSING_ON_PRIMARY
-    FIRST=$(grep "pg[[]${PG}.*recovering.*_update_calc_stats shard $primary " $log | grep -F " $UPACT " | head -1 | sed "s/.* \([0-9]*\)$/\1/")
+    FIRST=$(grep "pg[[]${PG}.*recovering.*update_calc_stats shard $primary " $log | grep -F " $UPACT " | head -1 | sed "s/.* \([0-9]*\)$/\1/")
     below_margin $FIRST $objects || return 1
-    LAST=$(grep "pg[[]${PG}.*recovering.*_update_calc_stats shard $primary " $log | tail -1 | sed "s/.* \([0-9]*\)$/\1/")
+    LAST=$(grep "pg[[]${PG}.*recovering.*update_calc_stats shard $primary " $log | tail -1 | sed "s/.* \([0-9]*\)$/\1/")
     above_margin $LAST 0 || return 1
 
     delete_pool $poolname
@@ -470,7 +472,7 @@ function TEST_recovery_multi() {
 
     kill $(cat $dir/osd.${primary}.pid)
     ceph osd down osd.${primary}
-    run_osd $dir ${otherosd}
+    activate_osd $dir ${otherosd}
     sleep 3
 
     for i in $(seq $(expr $half + 1) $objects)
@@ -483,7 +485,7 @@ function TEST_recovery_multi() {
 
     ceph osd unset noout
     ceph osd out osd.$primary osd.$otherosd
-    run_osd $dir ${primary}
+    activate_osd $dir ${primary}
     sleep 3
 
     ceph osd pool set test size 4

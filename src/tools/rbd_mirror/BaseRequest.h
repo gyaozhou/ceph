@@ -5,6 +5,7 @@
 #define CEPH_RBD_MIRROR_BASE_REQUEST_H
 
 #include "common/RefCountedObj.h"
+#include "include/Context.h"
 
 namespace rbd {
 namespace mirror {
@@ -12,7 +13,7 @@ namespace mirror {
 class BaseRequest : public RefCountedObject {
 public:
   BaseRequest(const std::string& name, CephContext *cct, Context *on_finish)
-    : RefCountedObject(cct, 1), m_name(name), m_cct(cct),
+    : RefCountedObject(cct), m_name(name), m_cct(cct),
       m_on_finish(on_finish) {
   }
 

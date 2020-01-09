@@ -9,7 +9,8 @@
 #include "librbd/ManagedLock.h"
 #include "librbd/Utils.h"
 #include "InstanceReplayer.h"
-#include "ImageSyncThrottler.h"
+#include "Throttler.h"
+#include "common/Cond.h"
 
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_rbd_mirror
@@ -58,7 +59,7 @@ struct C_RemoveInstanceRequest : public Context {
 
   C_RemoveInstanceRequest(librados::IoCtx &io_ctx, ContextWQ *work_queue,
                           const std::string &instance_id, Context *on_finish)
-    : instance_watcher(io_ctx, work_queue, nullptr, instance_id),
+    : instance_watcher(io_ctx, work_queue, nullptr, nullptr, instance_id),
       on_finish(on_finish) {
   }
 
@@ -71,7 +72,7 @@ struct C_RemoveInstanceRequest : public Context {
   void finish(int r) override {
     dout(10) << "C_RemoveInstanceRequest: " << this << " " << __func__ << ": r="
              << r << dendl;
-    assert(r == 0);
+    ceph_assert(r == 0);
 
     on_finish->complete(r);
   }
@@ -101,10 +102,10 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
              << ": instance_watcher=" << instance_watcher << ", instance_id="
              << instance_id << ", request_id=" << request_id << dendl;
 
-    assert(instance_watcher->m_lock.is_locked());
+    ceph_assert(ceph_mutex_is_locked(instance_watcher->m_lock));
 
     if (!send_to_leader) {
-      assert((!instance_id.empty()));
+      ceph_assert((!instance_id.empty()));
       notifier.reset(new librbd::watcher::Notifier(
                          instance_watcher->m_work_queue,
                          instance_watcher->m_ioctx,
@@ -114,13 +115,13 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
     instance_watcher->m_notify_op_tracker.start_op();
     auto result = instance_watcher->m_notify_ops.insert(
         std::make_pair(instance_id, this)).second;
-    assert(result);
+    ceph_assert(result);
   }
 
   void send() {
     dout(10) << "C_NotifyInstanceRequest: " << this << " " << __func__ << dendl;
 
-    assert(instance_watcher->m_lock.is_locked());
+    ceph_assert(ceph_mutex_is_locked(instance_watcher->m_lock));
 
     if (canceling) {
       dout(10) << "C_NotifyInstanceRequest: " << this << " " << __func__
@@ -140,13 +141,13 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
       if (instance_watcher->m_leader_instance_id != instance_id) {
         auto count = instance_watcher->m_notify_ops.erase(
             std::make_pair(instance_id, this));
-        assert(count > 0);
+        ceph_assert(count > 0);
 
         instance_id = instance_watcher->m_leader_instance_id;
 
         auto result = instance_watcher->m_notify_ops.insert(
             std::make_pair(instance_id, this)).second;
-        assert(result);
+        ceph_assert(result);
 
         notifier.reset(new librbd::watcher::Notifier(
                            instance_watcher->m_work_queue,
@@ -163,7 +164,7 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
   void cancel() {
     dout(10) << "C_NotifyInstanceRequest: " << this << " " << __func__ << dendl;
 
-    assert(instance_watcher->m_lock.is_locked());
+    ceph_assert(ceph_mutex_is_locked(instance_watcher->m_lock));
 
     canceling = true;
     instance_watcher->unsuspend_notify_request(this);
@@ -212,7 +213,7 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
         if (r == -ETIMEDOUT) {
           derr << "C_NotifyInstanceRequest: " << this << " " << __func__
                << ": resending after timeout" << dendl;
-          Mutex::Locker locker(instance_watcher->m_lock);
+	  std::lock_guard locker{instance_watcher->m_lock};
           send();
           return;
         } else {
@@ -222,7 +223,7 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
         if (r == -ESTALE && send_to_leader) {
           derr << "C_NotifyInstanceRequest: " << this << " " << __func__
                << ": resending due to leader change" << dendl;
-          Mutex::Locker locker(instance_watcher->m_lock);
+	  std::lock_guard locker{instance_watcher->m_lock};
           send();
           return;
         }
@@ -232,10 +233,10 @@ struct InstanceWatcher<I>::C_NotifyInstanceRequest : public Context {
     on_finish->complete(r);
 
     {
-      Mutex::Locker locker(instance_watcher->m_lock);
+      std::lock_guard locker{instance_watcher->m_lock};
       auto result = instance_watcher->m_notify_ops.erase(
         std::make_pair(instance_id, this));
-      assert(result > 0);
+      ceph_assert(result > 0);
       instance_watcher->m_notify_op_tracker.finish_op();
     }
 
@@ -294,7 +295,7 @@ void InstanceWatcher<I>::get_instances(librados::IoCtx &io_ctx,
   librados::AioCompletion *aio_comp = create_rados_callback(ctx);
 
   int r = io_ctx.aio_operate(RBD_MIRROR_LEADER, aio_comp, &op, &ctx->out_bl);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -311,8 +312,10 @@ void InstanceWatcher<I>::remove_instance(librados::IoCtx &io_ctx,
 template <typename I>
 InstanceWatcher<I> *InstanceWatcher<I>::create(
     librados::IoCtx &io_ctx, ContextWQ *work_queue,
-    InstanceReplayer<I> *instance_replayer) {
+    InstanceReplayer<I> *instance_replayer,
+    Throttler<I> *image_sync_throttler) {
   return new InstanceWatcher<I>(io_ctx, work_queue, instance_replayer,
+                                image_sync_throttler,
                                 stringify(io_ctx.get_instance_id()));
 }
 
@@ -320,22 +323,25 @@ template <typename I>
 InstanceWatcher<I>::InstanceWatcher(librados::IoCtx &io_ctx,
                                     ContextWQ *work_queue,
                                     InstanceReplayer<I> *instance_replayer,
+                                    Throttler<I> *image_sync_throttler,
                                     const std::string &instance_id)
   : Watcher(io_ctx, work_queue, RBD_MIRROR_INSTANCE_PREFIX + instance_id),
-    m_instance_replayer(instance_replayer), m_instance_id(instance_id),
-    m_lock(unique_lock_name("rbd::mirror::InstanceWatcher::m_lock", this)),
+    m_instance_replayer(instance_replayer),
+    m_image_sync_throttler(image_sync_throttler), m_instance_id(instance_id),
+    m_lock(ceph::make_mutex(
+      unique_lock_name("rbd::mirror::InstanceWatcher::m_lock", this))),
     m_instance_lock(librbd::ManagedLock<I>::create(
       m_ioctx, m_work_queue, m_oid, this, librbd::managed_lock::EXCLUSIVE, true,
-      m_cct->_conf->get_val<int64_t>("rbd_blacklist_expire_seconds"))) {
+      m_cct->_conf.get_val<uint64_t>("rbd_blacklist_expire_seconds"))) {
 }
 
 template <typename I>
 InstanceWatcher<I>::~InstanceWatcher() {
-  assert(m_notify_ops.empty());
-  assert(m_notify_op_tracker.empty());
-  assert(m_suspended_ops.empty());
-  assert(m_inflight_sync_reqs.empty());
-  assert(m_image_sync_throttler == nullptr);
+  ceph_assert(m_requests.empty());
+  ceph_assert(m_notify_ops.empty());
+  ceph_assert(m_notify_op_tracker.empty());
+  ceph_assert(m_suspended_ops.empty());
+  ceph_assert(m_inflight_sync_reqs.empty());
   m_instance_lock->destroy();
 }
 
@@ -350,9 +356,9 @@ template <typename I>
 void InstanceWatcher<I>::init(Context *on_finish) {
   dout(10) << "instance_id=" << m_instance_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  assert(m_on_finish == nullptr);
+  ceph_assert(m_on_finish == nullptr);
   m_on_finish = on_finish;
   m_ret_val = 0;
 
@@ -364,16 +370,16 @@ void InstanceWatcher<I>::shut_down() {
   C_SaferCond shut_down_ctx;
   shut_down(&shut_down_ctx);
   int r = shut_down_ctx.wait();
-  assert(r == 0);
+  ceph_assert(r == 0);
 }
 
 template <typename I>
 void InstanceWatcher<I>::shut_down(Context *on_finish) {
   dout(10) << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  assert(m_on_finish == nullptr);
+  ceph_assert(m_on_finish == nullptr);
   m_on_finish = on_finish;
   m_ret_val = 0;
 
@@ -384,9 +390,9 @@ template <typename I>
 void InstanceWatcher<I>::remove(Context *on_finish) {
   dout(10) << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  assert(m_on_finish == nullptr);
+  ceph_assert(m_on_finish == nullptr);
   m_on_finish = on_finish;
   m_ret_val = 0;
 
@@ -400,21 +406,16 @@ void InstanceWatcher<I>::notify_image_acquire(
   dout(10) << "instance_id=" << instance_id << ", global_image_id="
            << global_image_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  assert(m_on_finish == nullptr);
+  ceph_assert(m_on_finish == nullptr);
 
-  if (instance_id == m_instance_id) {
-    handle_image_acquire(global_image_id, on_notify_ack);
-  } else {
-    uint64_t request_id = ++m_request_seq;
-    bufferlist bl;
-    encode(NotifyMessage{ImageAcquirePayload{request_id, global_image_id}},
-             bl);
-    auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
-                                           std::move(bl), on_notify_ack);
-    req->send();
-  }
+  uint64_t request_id = ++m_request_seq;
+  bufferlist bl;
+  encode(NotifyMessage{ImageAcquirePayload{request_id, global_image_id}}, bl);
+  auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
+                                         std::move(bl), on_notify_ack);
+  req->send();
 }
 
 template <typename I>
@@ -424,21 +425,16 @@ void InstanceWatcher<I>::notify_image_release(
   dout(10) << "instance_id=" << instance_id << ", global_image_id="
            << global_image_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  assert(m_on_finish == nullptr);
+  ceph_assert(m_on_finish == nullptr);
 
-  if (instance_id == m_instance_id) {
-    handle_image_release(global_image_id, on_notify_ack);
-  } else {
-    uint64_t request_id = ++m_request_seq;
-    bufferlist bl;
-    encode(NotifyMessage{ImageReleasePayload{request_id, global_image_id}},
-             bl);
-    auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
-                                           std::move(bl), on_notify_ack);
-    req->send();
-  }
+  uint64_t request_id = ++m_request_seq;
+  bufferlist bl;
+  encode(NotifyMessage{ImageReleasePayload{request_id, global_image_id}}, bl);
+  auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
+                                         std::move(bl), on_notify_ack);
+  req->send();
 }
 
 template <typename I>
@@ -449,20 +445,16 @@ void InstanceWatcher<I>::notify_peer_image_removed(
            << "global_image_id=" << global_image_id << ", "
            << "peer_mirror_uuid=" << peer_mirror_uuid << dendl;
 
-  Mutex::Locker locker(m_lock);
-  assert(m_on_finish == nullptr);
+  std::lock_guard locker{m_lock};
+  ceph_assert(m_on_finish == nullptr);
 
-  if (instance_id == m_instance_id) {
-    handle_peer_image_removed(global_image_id, peer_mirror_uuid, on_notify_ack);
-  } else {
-    uint64_t request_id = ++m_request_seq;
-    bufferlist bl;
-    encode(NotifyMessage{PeerImageRemovedPayload{request_id, global_image_id,
-                                                   peer_mirror_uuid}}, bl);
-    auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
-                                           std::move(bl), on_notify_ack);
-    req->send();
-  }
+  uint64_t request_id = ++m_request_seq;
+  bufferlist bl;
+  encode(NotifyMessage{PeerImageRemovedPayload{request_id, global_image_id,
+                                               peer_mirror_uuid}}, bl);
+  auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
+                                         std::move(bl), on_notify_ack);
+  req->send();
 }
 
 template <typename I>
@@ -470,9 +462,9 @@ void InstanceWatcher<I>::notify_sync_request(const std::string &sync_id,
                                              Context *on_sync_start) {
   dout(10) << "sync_id=" << sync_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  assert(m_inflight_sync_reqs.count(sync_id) == 0);
+  ceph_assert(m_inflight_sync_reqs.count(sync_id) == 0);
 
   uint64_t request_id = ++m_request_seq;
 
@@ -491,7 +483,7 @@ template <typename I>
 bool InstanceWatcher<I>::cancel_sync_request(const std::string &sync_id) {
   dout(10) << "sync_id=" << sync_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   auto it = m_inflight_sync_reqs.find(sync_id);
   if (it == m_inflight_sync_reqs.end()) {
@@ -504,7 +496,7 @@ bool InstanceWatcher<I>::cancel_sync_request(const std::string &sync_id) {
     return false;
   }
 
-  assert(sync_ctx->req != nullptr);
+  ceph_assert(sync_ctx->req != nullptr);
   sync_ctx->req->cancel();
   return true;
 }
@@ -514,19 +506,19 @@ void InstanceWatcher<I>::notify_sync_start(const std::string &instance_id,
                                            const std::string &sync_id) {
   dout(10) << "sync_id=" << sync_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   uint64_t request_id = ++m_request_seq;
 
   bufferlist bl;
   encode(NotifyMessage{SyncStartPayload{request_id, sync_id}}, bl);
 
-  auto ctx = new FunctionContext(
+  auto ctx = new LambdaContext(
     [this, sync_id] (int r) {
       dout(10) << "finish: sync_id=" << sync_id << ", r=" << r << dendl;
-      Mutex::Locker locker(m_lock);
-      if (r != -ESTALE && m_image_sync_throttler != nullptr) {
-        m_image_sync_throttler->finish_op(sync_id);
+      std::lock_guard locker{m_lock};
+      if (r != -ESTALE && is_leader()) {
+        m_image_sync_throttler->finish_op(m_ioctx.get_namespace(), sync_id);
       }
     });
   auto req = new C_NotifyInstanceRequest(this, instance_id, request_id,
@@ -536,21 +528,21 @@ void InstanceWatcher<I>::notify_sync_start(const std::string &instance_id,
 
 template <typename I>
 void InstanceWatcher<I>::notify_sync_complete(const std::string &sync_id) {
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
   notify_sync_complete(m_lock, sync_id);
 }
 
 template <typename I>
-void InstanceWatcher<I>::notify_sync_complete(const Mutex&,
+void InstanceWatcher<I>::notify_sync_complete(const ceph::mutex&,
                                               const std::string &sync_id) {
   dout(10) << "sync_id=" << sync_id << dendl;
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   auto it = m_inflight_sync_reqs.find(sync_id);
-  assert(it != m_inflight_sync_reqs.end());
+  ceph_assert(it != m_inflight_sync_reqs.end());
 
   auto sync_ctx = it->second;
-  assert(sync_ctx->req == nullptr);
+  ceph_assert(sync_ctx->req == nullptr);
 
   m_inflight_sync_reqs.erase(it);
   m_work_queue->queue(sync_ctx, 0);
@@ -563,9 +555,9 @@ void InstanceWatcher<I>::handle_notify_sync_request(C_SyncRequest *sync_ctx,
 
   Context *on_start = nullptr;
   {
-    Mutex::Locker locker(m_lock);
-    assert(sync_ctx->req != nullptr);
-    assert(sync_ctx->on_start != nullptr);
+    std::lock_guard locker{m_lock};
+    ceph_assert(sync_ctx->req != nullptr);
+    ceph_assert(sync_ctx->on_start != nullptr);
 
     if (sync_ctx->req->canceling) {
       r = -ECANCELED;
@@ -593,23 +585,10 @@ void InstanceWatcher<I>::handle_notify_sync_complete(C_SyncRequest *sync_ctx,
 }
 
 template <typename I>
-void InstanceWatcher<I>::print_sync_status(Formatter *f, stringstream *ss) {
-  dout(10) << dendl;
-
-  Mutex::Locker locker(m_lock);
-  if (m_image_sync_throttler != nullptr) {
-    m_image_sync_throttler->print_status(f, ss);
-  }
-}
-
-template <typename I>
 void InstanceWatcher<I>::handle_acquire_leader() {
   dout(10) << dendl;
 
-  Mutex::Locker locker(m_lock);
-
-  assert(m_image_sync_throttler == nullptr);
-  m_image_sync_throttler = ImageSyncThrottler<I>::create();
+  std::lock_guard locker{m_lock};
 
   m_leader_instance_id = m_instance_id;
   unsuspend_notify_requests();
@@ -619,15 +598,11 @@ template <typename I>
 void InstanceWatcher<I>::handle_release_leader() {
   dout(10) << dendl;
 
-  Mutex::Locker locker(m_lock);
-
-  assert(m_image_sync_throttler != nullptr);
+  std::lock_guard locker{m_lock};
 
   m_leader_instance_id.clear();
 
-  m_image_sync_throttler->drain(-ESTALE);
-  m_image_sync_throttler->destroy();
-  m_image_sync_throttler = nullptr;
+  m_image_sync_throttler->drain(m_ioctx.get_namespace(), -ESTALE);
 }
 
 template <typename I>
@@ -635,7 +610,7 @@ void InstanceWatcher<I>::handle_update_leader(
   const std::string &leader_instance_id) {
   dout(10) << "leader_instance_id=" << leader_instance_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   m_leader_instance_id = leader_instance_id;
 
@@ -649,7 +624,7 @@ void InstanceWatcher<I>::cancel_notify_requests(
     const std::string &instance_id) {
   dout(10) << "instance_id=" << instance_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   for (auto op : m_notify_ops) {
     if (op.first == instance_id && !op.second->send_to_leader) {
@@ -660,7 +635,7 @@ void InstanceWatcher<I>::cancel_notify_requests(
 
 template <typename I>
 void InstanceWatcher<I>::register_instance() {
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   dout(10) << dendl;
 
@@ -670,7 +645,7 @@ void InstanceWatcher<I>::register_instance() {
     InstanceWatcher<I>, &InstanceWatcher<I>::handle_register_instance>(this);
 
   int r = m_ioctx.aio_operate(RBD_MIRROR_LEADER, aio_comp, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -680,7 +655,7 @@ void InstanceWatcher<I>::handle_register_instance(int r) {
 
   Context *on_finish = nullptr;
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
 
     if (r == 0) {
       create_instance_object();
@@ -699,7 +674,7 @@ template <typename I>
 void InstanceWatcher<I>::create_instance_object() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   librados::ObjectWriteOperation op;
   op.create(true);
@@ -708,7 +683,7 @@ void InstanceWatcher<I>::create_instance_object() {
     InstanceWatcher<I>,
     &InstanceWatcher<I>::handle_create_instance_object>(this);
   int r = m_ioctx.aio_operate(m_oid, aio_comp, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -716,7 +691,7 @@ template <typename I>
 void InstanceWatcher<I>::handle_create_instance_object(int r) {
   dout(10) << "r=" << r << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   if (r < 0) {
     derr << "error creating " << m_oid << " object: " << cpp_strerror(r)
@@ -734,7 +709,7 @@ template <typename I>
 void InstanceWatcher<I>::register_watch() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Context *ctx = create_async_context_callback(
     m_work_queue, create_context_callback<
@@ -747,7 +722,7 @@ template <typename I>
 void InstanceWatcher<I>::handle_register_watch(int r) {
   dout(10) << "r=" << r << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   if (r < 0) {
     derr << "error registering instance watcher for " << m_oid << " object: "
@@ -765,7 +740,7 @@ template <typename I>
 void InstanceWatcher<I>::acquire_lock() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Context *ctx = create_async_context_callback(
     m_work_queue, create_context_callback<
@@ -780,7 +755,7 @@ void InstanceWatcher<I>::handle_acquire_lock(int r) {
 
   Context *on_finish = nullptr;
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
 
     if (r < 0) {
 
@@ -801,7 +776,7 @@ template <typename I>
 void InstanceWatcher<I>::release_lock() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Context *ctx = create_async_context_callback(
     m_work_queue, create_context_callback<
@@ -814,7 +789,7 @@ template <typename I>
 void InstanceWatcher<I>::handle_release_lock(int r) {
   dout(10) << "r=" << r << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   if (r < 0) {
     derr << "error releasing instance lock: " << cpp_strerror(r) << dendl;
@@ -827,7 +802,7 @@ template <typename I>
 void InstanceWatcher<I>::unregister_watch() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Context *ctx = create_async_context_callback(
     m_work_queue, create_context_callback<
@@ -845,13 +820,13 @@ void InstanceWatcher<I>::handle_unregister_watch(int r) {
          << cpp_strerror(r) << dendl;
   }
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
   remove_instance_object();
 }
 
 template <typename I>
 void InstanceWatcher<I>::remove_instance_object() {
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   dout(10) << dendl;
 
@@ -862,7 +837,7 @@ void InstanceWatcher<I>::remove_instance_object() {
     InstanceWatcher<I>,
     &InstanceWatcher<I>::handle_remove_instance_object>(this);
   int r = m_ioctx.aio_operate(m_oid, aio_comp, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -879,7 +854,7 @@ void InstanceWatcher<I>::handle_remove_instance_object(int r) {
          << dendl;
   }
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
   unregister_instance();
 }
 
@@ -887,7 +862,7 @@ template <typename I>
 void InstanceWatcher<I>::unregister_instance() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   librados::ObjectWriteOperation op;
   librbd::cls_client::mirror_instances_remove(&op, m_instance_id);
@@ -895,7 +870,7 @@ void InstanceWatcher<I>::unregister_instance() {
     InstanceWatcher<I>, &InstanceWatcher<I>::handle_unregister_instance>(this);
 
   int r = m_ioctx.aio_operate(RBD_MIRROR_LEADER, aio_comp, &op);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -907,7 +882,7 @@ void InstanceWatcher<I>::handle_unregister_instance(int r) {
     derr << "error unregistering instance: " << cpp_strerror(r) << dendl;
   }
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
   wait_for_notify_ops();
 }
 
@@ -915,7 +890,7 @@ template <typename I>
 void InstanceWatcher<I>::wait_for_notify_ops() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   for (auto op : m_notify_ops) {
     op.second->cancel();
@@ -932,13 +907,13 @@ template <typename I>
 void InstanceWatcher<I>::handle_wait_for_notify_ops(int r) {
   dout(10) << "r=" << r << dendl;
 
-  assert(r == 0);
+  ceph_assert(r == 0);
 
   Context *on_finish = nullptr;
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
 
-    assert(m_notify_ops.empty());
+    ceph_assert(m_notify_ops.empty());
 
     std::swap(on_finish, m_on_finish);
     r = m_ret_val;
@@ -950,7 +925,7 @@ template <typename I>
 void InstanceWatcher<I>::get_instance_locker() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Context *ctx = create_async_context_callback(
     m_work_queue, create_context_callback<
@@ -963,7 +938,7 @@ template <typename I>
 void InstanceWatcher<I>::handle_get_instance_locker(int r) {
   dout(10) << "r=" << r << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   if (r < 0) {
     if (r != -ENOENT) {
@@ -980,7 +955,7 @@ template <typename I>
 void InstanceWatcher<I>::break_instance_lock() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   Context *ctx = create_async_context_callback(
     m_work_queue, create_context_callback<
@@ -993,7 +968,7 @@ template <typename I>
 void InstanceWatcher<I>::handle_break_instance_lock(int r) {
   dout(10) << "r=" << r << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   if (r < 0) {
     if (r != -ENOENT) {
@@ -1010,10 +985,10 @@ template <typename I>
 void InstanceWatcher<I>::suspend_notify_request(C_NotifyInstanceRequest *req) {
   dout(10) << req << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   auto result = m_suspended_ops.insert(req).second;
-  assert(result);
+  ceph_assert(result);
 }
 
 template <typename I>
@@ -1021,7 +996,7 @@ bool InstanceWatcher<I>::unsuspend_notify_request(
   C_NotifyInstanceRequest *req) {
   dout(10) << req << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   auto result = m_suspended_ops.erase(req);
   if (result == 0) {
@@ -1036,7 +1011,7 @@ template <typename I>
 void InstanceWatcher<I>::unsuspend_notify_requests() {
   dout(10) << dendl;
 
-  assert(m_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_lock));
 
   std::set<C_NotifyInstanceRequest *> suspended_ops;
   std::swap(m_suspended_ops, suspended_ops);
@@ -1053,7 +1028,7 @@ Context *InstanceWatcher<I>::prepare_request(const std::string &instance_id,
   dout(10) << "instance_id=" << instance_id << ", request_id=" << request_id
            << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   Context *ctx = nullptr;
   Request request(instance_id, request_id);
@@ -1065,7 +1040,7 @@ Context *InstanceWatcher<I>::prepare_request(const std::string &instance_id,
     m_requests.erase(it);
   } else {
     ctx = create_async_context_callback(
-        m_work_queue, new FunctionContext(
+        m_work_queue, new LambdaContext(
             [this, instance_id, request_id] (int r) {
               complete_request(instance_id, request_id, r);
             }));
@@ -1084,10 +1059,10 @@ void InstanceWatcher<I>::complete_request(const std::string &instance_id,
 
   C_NotifyAck *on_notify_ack;
   {
-    Mutex::Locker locker(m_lock);
+    std::lock_guard locker{m_lock};
     Request request(instance_id, request_id);
     auto it = m_requests.find(request);
-    assert(it != m_requests.end());
+    ceph_assert(it != m_requests.end());
     on_notify_ack = it->on_notify_ack;
     m_requests.erase(it);
   }
@@ -1123,7 +1098,7 @@ void InstanceWatcher<I>::handle_image_acquire(
     const std::string &global_image_id, Context *on_finish) {
   dout(10) << "global_image_id=" << global_image_id << dendl;
 
-  auto ctx = new FunctionContext(
+  auto ctx = new LambdaContext(
       [this, global_image_id, on_finish] (int r) {
         m_instance_replayer->acquire_image(this, global_image_id, on_finish);
         m_notify_op_tracker.finish_op();
@@ -1138,7 +1113,7 @@ void InstanceWatcher<I>::handle_image_release(
     const std::string &global_image_id, Context *on_finish) {
   dout(10) << "global_image_id=" << global_image_id << dendl;
 
-  auto ctx = new FunctionContext(
+  auto ctx = new LambdaContext(
       [this, global_image_id, on_finish] (int r) {
         m_instance_replayer->release_image(global_image_id, on_finish);
         m_notify_op_tracker.finish_op();
@@ -1155,7 +1130,7 @@ void InstanceWatcher<I>::handle_peer_image_removed(
   dout(10) << "global_image_id=" << global_image_id << ", "
            << "peer_mirror_uuid=" << peer_mirror_uuid << dendl;
 
-  auto ctx = new FunctionContext(
+  auto ctx = new LambdaContext(
       [this, peer_mirror_uuid, global_image_id, on_finish] (int r) {
         m_instance_replayer->remove_peer_image(global_image_id,
                                                peer_mirror_uuid, on_finish);
@@ -1172,25 +1147,28 @@ void InstanceWatcher<I>::handle_sync_request(const std::string &instance_id,
                                              Context *on_finish) {
   dout(10) << "instance_id=" << instance_id << ", sync_id=" << sync_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
-  if (m_image_sync_throttler == nullptr) {
+  if (!is_leader()) {
     dout(10) << "sync request for non-leader" << dendl;
     m_work_queue->queue(on_finish, -ESTALE);
     return;
   }
 
   Context *on_start = create_async_context_callback(
-    m_work_queue, new FunctionContext(
+    m_work_queue, new LambdaContext(
       [this, instance_id, sync_id, on_finish] (int r) {
         dout(10) << "handle_sync_request: finish: instance_id=" << instance_id
                  << ", sync_id=" << sync_id << ", r=" << r << dendl;
         if (r == 0) {
           notify_sync_start(instance_id, sync_id);
         }
+        if (r == -ENOENT) {
+          r = 0;
+        }
         on_finish->complete(r);
       }));
-  m_image_sync_throttler->start_op(sync_id, on_start);
+  m_image_sync_throttler->start_op(m_ioctx.get_namespace(), sync_id, on_start);
 }
 
 template <typename I>
@@ -1199,7 +1177,7 @@ void InstanceWatcher<I>::handle_sync_start(const std::string &instance_id,
                                            Context *on_finish) {
   dout(10) << "instance_id=" << instance_id << ", sync_id=" << sync_id << dendl;
 
-  Mutex::Locker locker(m_lock);
+  std::lock_guard locker{m_lock};
 
   auto it = m_inflight_sync_reqs.find(sync_id);
   if (it == m_inflight_sync_reqs.end()) {

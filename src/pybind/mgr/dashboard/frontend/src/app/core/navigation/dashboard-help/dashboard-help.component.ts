@@ -1,7 +1,12 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ViewChild } from '@angular/core';
 
+import { BsModalRef, BsModalService } from 'ngx-bootstrap/modal';
+
+import { Icons } from '../../../shared/enum/icons.enum';
 import { CephReleaseNamePipe } from '../../../shared/pipes/ceph-release-name.pipe';
+import { AuthStorageService } from '../../../shared/services/auth-storage.service';
 import { SummaryService } from '../../../shared/services/summary.service';
+import { AboutComponent } from '../about/about.component';
 
 @Component({
   selector: 'cd-dashboard-help',
@@ -9,17 +14,42 @@ import { SummaryService } from '../../../shared/services/summary.service';
   styleUrls: ['./dashboard-help.component.scss']
 })
 export class DashboardHelpComponent implements OnInit {
-
+  @ViewChild('docsForm', { static: true })
+  docsFormElement;
   docsUrl: string;
+  modalRef: BsModalRef;
+  icons = Icons;
 
-  constructor(private summaryService: SummaryService,
-              private cephReleaseNamePipe: CephReleaseNamePipe) {}
+  constructor(
+    private summaryService: SummaryService,
+    private cephReleaseNamePipe: CephReleaseNamePipe,
+    private modalService: BsModalService,
+    private authStorageService: AuthStorageService
+  ) {}
 
   ngOnInit() {
-    const subs = this.summaryService.summaryData$.subscribe((summary: any) => {
+    const subs = this.summaryService.subscribe((summary: any) => {
+      if (!summary) {
+        return;
+      }
+
       const releaseName = this.cephReleaseNamePipe.transform(summary.version);
       this.docsUrl = `http://docs.ceph.com/docs/${releaseName}/mgr/dashboard/`;
-      subs.unsubscribe();
+
+      setTimeout(() => {
+        subs.unsubscribe();
+      }, 0);
     });
+  }
+
+  openAboutModal() {
+    this.modalRef = this.modalService.show(AboutComponent);
+    this.modalRef.setClass('modal-lg');
+  }
+
+  goToApiDocs() {
+    const tokenInput = this.docsFormElement.nativeElement.children[0];
+    tokenInput.value = this.authStorageService.getToken();
+    this.docsFormElement.nativeElement.submit();
   }
 }

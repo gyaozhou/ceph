@@ -49,7 +49,7 @@ Add Keys
 ========
 
 Add a key to your system's list of trusted keys to avoid a security warning. For
-major releases (e.g., ``hammer``, ``jewel``, ``luminous``) and development releases
+major releases (e.g., ``luminous``, ``mimic``, ``nautilus``) and development releases
 (``release-name-rc1``, ``release-name-rc2``), use the ``release.asc`` key.
 
 
@@ -83,7 +83,7 @@ You may find releases for CentOS/RHEL and others (installed with YUM) at::
 
 	https://download.ceph.com/rpm-{release-name}
 
-The major releases of Ceph are summarized at: :ref:`ceph-releases`
+The major releases of Ceph are summarized at: :ref:`ceph-releases-general`
 
 Every second major release is considered Long Term Stable (LTS). Critical
 bugfixes are backported to LTS releases until their retirement. Since retired
@@ -119,13 +119,6 @@ release::
 
 	echo deb https://download.ceph.com/debian-{release-name}/ $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/ceph.list
 
-Ceph on ARM processors requires Google's memory profiling tools (``google-perftools``).
-The Ceph repository should have a copy at
-https://download.ceph.com/packages/google-perftools/debian. ::
-
-	echo deb https://download.ceph.com/packages/google-perftools/debian  $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/google-perftools.list
-
-
 For development release packages, add our package repository to your system's
 list of APT sources.  See `the testing Debian repository`_ for a complete list
 of Debian and Ubuntu releases supported. ::
@@ -139,9 +132,12 @@ of Debian and Ubuntu releases supported. ::
 RPM Packages
 ------------
 
+RHEL
+----
+
 For major releases, you may add a Ceph entry to the ``/etc/yum.repos.d``
 directory. Create a ``ceph.repo`` file. In the example below, replace
-``{ceph-release}`` with  a major release of Ceph (e.g., ``hammer``, ``jewel``, ``luminous``,
+``{ceph-release}`` with  a major release of Ceph (e.g., ``luminous``, ``mimic``, ``nautilus``,
 etc.) and ``{distro}`` with your Linux distribution (e.g., ``el7``, etc.).  You
 may view https://download.ceph.com/rpm-{ceph-release}/ directory to see which
 distributions Ceph supports. Some Ceph packages (e.g., EPEL) must take priority
@@ -191,6 +187,19 @@ You can download the RPMs directly from::
 
 .. tip:: For non-US users: There might be a mirror close to you where
          to download Ceph from. For more information see: `Ceph Mirrors`_.
+
+openSUSE Leap 15.1
+------------------
+
+You need to add the Ceph package repository to your list of zypper sources. This can be done with the following command ::
+
+    zypper ar https://download.opensuse.org/repositories/filesystems:/ceph/openSUSE_Leap_15.1/filesystems:ceph.repo
+
+openSUSE Tumbleweed
+-------------------
+
+The newest major release of Ceph is already available through the normal Tumbleweed repositories.
+There's no need to add another package repository manually.
 
 
 Add Ceph Development
@@ -255,7 +264,7 @@ before attempting an install.
 Debian Packages
 ---------------
 
-Ceph requires additional additional third party libraries.
+Ceph requires additional third party libraries.
 
 - libaio1
 - libsnappy1

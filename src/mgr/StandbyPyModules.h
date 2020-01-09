@@ -13,25 +13,27 @@
 
 #pragma once
 
-#include "PythonCompat.h"
-
 #include <string>
 #include <map>
 
+#include <Python.h>
+
 #include "common/Thread.h"
-#include "common/Mutex.h"
+#include "common/ceph_mutex.h"
 
 #include "mgr/Gil.h"
 #include "mon/MonClient.h"
 #include "mon/MgrMap.h"
 #include "mgr/PyModuleRunner.h"
 
+class Finisher;
+
 /**
  * State that is read by all modules running in standby mode
  */
 class StandbyPyModuleState
 {
-  mutable Mutex lock{"StandbyPyModuleState::lock"};
+  mutable ceph::mutex lock = ceph::make_mutex("StandbyPyModuleState::lock");
 
   MgrMap mgr_map;
   PyModuleConfig &module_config;
@@ -46,7 +48,7 @@ public:
 
   void set_mgr_map(const MgrMap &mgr_map_)
   {
-    Mutex::Locker l(lock);
+    std::lock_guard l(lock);
 
     mgr_map = mgr_map_;
   }
@@ -58,14 +60,14 @@ public:
   template<typename Callback, typename...Args>
   void with_mgr_map(Callback&& cb, Args&&...args) const
   {
-    Mutex::Locker l(lock);
+    std::lock_guard l(lock);
     std::forward<Callback>(cb)(mgr_map, std::forward<Args>(args)...);
   }
 
   template<typename Callback, typename...Args>
   auto with_config(Callback&& cb, Args&&... args) const ->
     decltype(cb(module_config, std::forward<Args>(args)...)) {
-    Mutex::Locker l(lock);
+    std::lock_guard l(lock);
 
     return std::forward<Callback>(cb)(module_config, std::forward<Args>(args)...);
   }
@@ -98,12 +100,14 @@ class StandbyPyModule : public PyModuleRunner
 class StandbyPyModules
 {
 private:
-  mutable Mutex lock{"StandbyPyModules::lock"};
+  mutable ceph::mutex lock = ceph::make_mutex("StandbyPyModules::lock");
   std::map<std::string, std::unique_ptr<StandbyPyModule>> modules;
 
   StandbyPyModuleState state;
 
   LogChannelRef clog;
+
+  Finisher &finisher;
 
 public:
 
@@ -111,9 +115,10 @@ public:
       const MgrMap &mgr_map_,
       PyModuleConfig &module_config,
       LogChannelRef clog_,
-      MonClient &monc);
+      MonClient &monc,
+      Finisher &f);
 
-  int start_one(PyModuleRef py_module);
+  void start_one(PyModuleRef py_module);
 
   void shutdown();
 

@@ -17,6 +17,7 @@
 #include <errno.h>
 
 #include "objclass/objclass.h"
+#include "osd/osd_types.h"
 
 #include "cls_cephfs.h"
 
@@ -85,8 +86,8 @@ static int set_if_greater(cls_method_context_t hctx,
 static int accumulate_inode_metadata(cls_method_context_t hctx,
     bufferlist *in, bufferlist *out)
 {
-  assert(in != NULL);
-  assert(out != NULL);
+  ceph_assert(in != NULL);
+  ceph_assert(out != NULL);
 
   int r = 0;
 
@@ -145,13 +146,13 @@ public:
   }
 
   ~PGLSCephFSFilter() override {}
-  bool reject_empty_xattr() override { return false; }
-  bool filter(const hobject_t &obj, bufferlist& xattr_data,
-                      bufferlist& outdata) override;
+  bool reject_empty_xattr() const override { return false; }
+  bool filter(const hobject_t& obj,
+              const bufferlist& xattr_data) const override;
 };
 
 bool PGLSCephFSFilter::filter(const hobject_t &obj,
-                             bufferlist& xattr_data, bufferlist& outdata)
+                              const bufferlist& xattr_data) const
 {
   const std::string need_ending = ".00000000";
   const std::string &obj_name = obj.oid.name;

@@ -1,147 +1,27 @@
 // -*- mode:C; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
+
 /**
  * Crypto filters for Put/Post/Get operations.
  */
+
 #include <rgw/rgw_op.h>
 #include <rgw/rgw_crypt.h>
 #include <auth/Crypto.h>
 #include <rgw/rgw_b64.h>
 #include <rgw/rgw_rest_s3.h>
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include <boost/utility/string_view.hpp>
-#include <rgw/rgw_keystone.h>
-#include "include/str_map.h"
 #include "crypto/crypto_accel.h"
 #include "crypto/crypto_plugin.h"
-#ifdef USE_NSS
-# include <nspr.h>
-# include <nss.h>
-# include <pk11pub.h>
-#endif
+#include "rgw/rgw_kms.h"
+
+#include <openssl/evp.h>
 
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_rgw
 
 using namespace rgw;
-
-/**
- * Encryption in CTR mode. offset is used as IV for each block.
- */
-class AES_256_CTR : public BlockCrypt {
-public:
-  static const size_t AES_256_KEYSIZE = 256 / 8;
-  static const size_t AES_256_IVSIZE = 128 / 8;
-private:
-  static const uint8_t IV[AES_256_IVSIZE];
-  CephContext* cct;
-  uint8_t key[AES_256_KEYSIZE];
-public:
-  explicit AES_256_CTR(CephContext* cct): cct(cct) {
-  }
-  ~AES_256_CTR() {
-    memset(key, 0, AES_256_KEYSIZE);
-  }
-  bool set_key(const uint8_t* _key, size_t key_size) {
-    if (key_size != AES_256_KEYSIZE) {
-      return false;
-    }
-    memcpy(key, _key, AES_256_KEYSIZE);
-    return true;
-  }
-  size_t get_block_size() {
-    return AES_256_IVSIZE;
-  }
-
-#ifdef USE_NSS
-
-  bool encrypt(bufferlist& input, off_t in_ofs, size_t size, bufferlist& output, off_t stream_offset)
-  {
-    bool result = false;
-    PK11SlotInfo *slot;
-    SECItem keyItem;
-    PK11SymKey *symkey;
-    CK_AES_CTR_PARAMS ctr_params = {0};
-    SECItem ivItem;
-    SECItem *param;
-    SECStatus ret;
-    PK11Context *ectx;
-    int written;
-    unsigned int written2;
-
-    slot = PK11_GetBestSlot(CKM_AES_CTR, NULL);
-    if (slot) {
-      keyItem.type = siBuffer;
-      keyItem.data = key;
-      keyItem.len = AES_256_KEYSIZE;
-
-      symkey = PK11_ImportSymKey(slot, CKM_AES_CTR, PK11_OriginUnwrap, CKA_UNWRAP, &keyItem, NULL);
-      if (symkey) {
-        static_assert(sizeof(ctr_params.cb) >= AES_256_IVSIZE, "Must fit counter");
-        ctr_params.ulCounterBits = 128;
-        prepare_iv(reinterpret_cast<unsigned char*>(&ctr_params.cb), stream_offset);
-
-        ivItem.type = siBuffer;
-        ivItem.data = (unsigned char*)&ctr_params;
-        ivItem.len = sizeof(ctr_params);
-
-        param = PK11_ParamFromIV(CKM_AES_CTR, &ivItem);
-        if (param) {
-          ectx = PK11_CreateContextBySymKey(CKM_AES_CTR, CKA_ENCRYPT, symkey, param);
-          if (ectx) {
-            buffer::ptr buf((size + AES_256_KEYSIZE - 1) / AES_256_KEYSIZE * AES_256_KEYSIZE);
-            ret = PK11_CipherOp(ectx,
-                                (unsigned char*)buf.c_str(), &written, buf.length(),
-                                (unsigned char*)input.c_str() + in_ofs, size);
-            if (ret == SECSuccess) {
-              ret = PK11_DigestFinal(ectx,
-                                     (unsigned char*)buf.c_str() + written, &written2,
-                                     buf.length() - written);
-              if (ret == SECSuccess) {
-                buf.set_length(written + written2);
-                output.append(buf);
-                result = true;
-              }
-            }
-            PK11_DestroyContext(ectx, PR_TRUE);
-          }
-          SECITEM_FreeItem(param, PR_TRUE);
-        }
-        PK11_FreeSymKey(symkey);
-      }
-      PK11_FreeSlot(slot);
-    }
-    if (result == false) {
-      ldout(cct, 5) << "Failed to perform AES-CTR encryption: " << PR_GetError() << dendl;
-    }
-    return result;
-  }
-
-#else
-# error "No supported crypto implementation found."
-#endif
-  /* in CTR encrypt is the same as decrypt */
-  bool decrypt(bufferlist& input, off_t in_ofs, size_t size, bufferlist& output, off_t stream_offset) {
-	  return encrypt(input, in_ofs, size, output, stream_offset);
-  }
-
-  void prepare_iv(unsigned char iv[AES_256_IVSIZE], off_t offset) {
-    off_t index = offset / AES_256_IVSIZE;
-    off_t i = AES_256_IVSIZE - 1;
-    unsigned int val;
-    unsigned int carry = 0;
-    while (i>=0) {
-      val = (index & 0xff) + IV[i] + carry;
-      iv[i] = val;
-      carry = val >> 8;
-      index = index >> 8;
-      i--;
-    }
-  }
-};
-
-const uint8_t AES_256_CTR::IV[AES_256_CTR::AES_256_IVSIZE] =
-    { 'a', 'e', 's', '2', '5', '6', 'i', 'v', '_', 'c', 't', 'r', '1', '3', '3', '7' };
 
 
 CryptoAccelRef get_crypto_accel(CephContext *cct)
@@ -162,6 +42,70 @@ CryptoAccelRef get_crypto_accel(CephContext *cct)
         " with description: " << ss.str() << dendl;
   }
   return ca_impl;
+}
+
+
+template <std::size_t KeySizeV, std::size_t IvSizeV>
+static inline
+bool evp_sym_transform(CephContext* const cct,
+                       const EVP_CIPHER* const type,
+                       unsigned char* const out,
+                       const unsigned char* const in,
+                       const size_t size,
+                       const unsigned char* const iv,
+                       const unsigned char* const key,
+                       const bool encrypt)
+{
+  using pctx_t = \
+    std::unique_ptr<EVP_CIPHER_CTX, decltype(&::EVP_CIPHER_CTX_free)>;
+  pctx_t pctx{ EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free };
+
+  if (!pctx) {
+    return false;
+  }
+
+  if (1 != EVP_CipherInit_ex(pctx.get(), type, nullptr,
+                             nullptr, nullptr, encrypt)) {
+    ldout(cct, 5) << "EVP: failed to 1st initialization stage" << dendl;
+    return false;
+  }
+
+  // we want to support ciphers that don't use IV at all like AES-256-ECB
+  if constexpr (static_cast<bool>(IvSizeV)) {
+    ceph_assert(EVP_CIPHER_CTX_iv_length(pctx.get()) == IvSizeV);
+    ceph_assert(EVP_CIPHER_CTX_block_size(pctx.get()) == IvSizeV);
+  }
+  ceph_assert(EVP_CIPHER_CTX_key_length(pctx.get()) == KeySizeV);
+
+  if (1 != EVP_CipherInit_ex(pctx.get(), nullptr, nullptr, key, iv, encrypt)) {
+    ldout(cct, 5) << "EVP: failed to 2nd initialization stage" << dendl;
+    return false;
+  }
+
+  // disable padding
+  if (1 != EVP_CIPHER_CTX_set_padding(pctx.get(), 0)) {
+    ldout(cct, 5) << "EVP: cannot disable PKCS padding" << dendl;
+    return false;
+  }
+
+  // operate!
+  int written = 0;
+  ceph_assert(size <= static_cast<size_t>(std::numeric_limits<int>::max()));
+  if (1 != EVP_CipherUpdate(pctx.get(), out, &written, in, size)) {
+    ldout(cct, 5) << "EVP: EVP_CipherUpdate failed" << dendl;
+    return false;
+  }
+
+  int finally_written = 0;
+  static_assert(sizeof(*out) == 1);
+  if (1 != EVP_CipherFinal_ex(pctx.get(), out + written, &finally_written)) {
+    ldout(cct, 5) << "EVP: EVP_CipherFinal_ex failed" << dendl;
+    return false;
+  }
+
+  // padding is disabled so EVP_CipherFinal_ex should not append anything
+  ceph_assert(finally_written == 0);
+  return (written + finally_written) == static_cast<int>(size);
 }
 
 
@@ -203,7 +147,7 @@ public:
   explicit AES_256_CBC(CephContext* cct): cct(cct) {
   }
   ~AES_256_CBC() {
-    memset(key, 0, AES_256_KEYSIZE);
+    ::ceph::crypto::zeroize_for_security(key, AES_256_KEYSIZE);
   }
   bool set_key(const uint8_t* _key, size_t key_size) {
     if (key_size != AES_256_KEYSIZE) {
@@ -216,65 +160,16 @@ public:
     return CHUNK_SIZE;
   }
 
-#ifdef USE_NSS
-
   bool cbc_transform(unsigned char* out,
                      const unsigned char* in,
-                     size_t size,
+                     const size_t size,
                      const unsigned char (&iv)[AES_256_IVSIZE],
                      const unsigned char (&key)[AES_256_KEYSIZE],
                      bool encrypt)
   {
-    bool result = false;
-    PK11SlotInfo *slot;
-    SECItem keyItem;
-    PK11SymKey *symkey;
-    CK_AES_CBC_ENCRYPT_DATA_PARAMS ctr_params = {0};
-    SECItem ivItem;
-    SECItem *param;
-    SECStatus ret;
-    PK11Context *ectx;
-    int written;
-
-    slot = PK11_GetBestSlot(CKM_AES_CBC, NULL);
-    if (slot) {
-      keyItem.type = siBuffer;
-      keyItem.data = const_cast<unsigned char*>(&key[0]);
-      keyItem.len = AES_256_KEYSIZE;
-      symkey = PK11_ImportSymKey(slot, CKM_AES_CBC, PK11_OriginUnwrap, CKA_UNWRAP, &keyItem, NULL);
-      if (symkey) {
-        memcpy(ctr_params.iv, iv, AES_256_IVSIZE);
-        ivItem.type = siBuffer;
-        ivItem.data = (unsigned char*)&ctr_params;
-        ivItem.len = sizeof(ctr_params);
-
-        param = PK11_ParamFromIV(CKM_AES_CBC, &ivItem);
-        if (param) {
-          ectx = PK11_CreateContextBySymKey(CKM_AES_CBC, encrypt?CKA_ENCRYPT:CKA_DECRYPT, symkey, param);
-          if (ectx) {
-            ret = PK11_CipherOp(ectx,
-                                out, &written, size,
-                                in, size);
-            if ((ret == SECSuccess) && (written == (int)size)) {
-              result = true;
-            }
-            PK11_DestroyContext(ectx, PR_TRUE);
-          }
-          SECITEM_FreeItem(param, PR_TRUE);
-        }
-        PK11_FreeSymKey(symkey);
-      }
-      PK11_FreeSlot(slot);
-    }
-    if (result == false) {
-      ldout(cct, 5) << "Failed to perform AES-CBC encryption: " << PR_GetError() << dendl;
-    }
-    return result;
+    return evp_sym_transform<AES_256_KEYSIZE, AES_256_IVSIZE>(
+      cct, EVP_aes_256_cbc(), out, in, size, iv, key, encrypt);
   }
-
-#else
-# error "No supported crypto implementation found."
-#endif
 
   bool cbc_transform(unsigned char* out,
                      const unsigned char* in,
@@ -444,7 +339,7 @@ std::unique_ptr<BlockCrypt> AES_256_CBC_create(CephContext* cct, const uint8_t* 
 {
   auto cbc = std::unique_ptr<AES_256_CBC>(new AES_256_CBC(cct));
   cbc->set_key(key, AES_256_KEYSIZE);
-  return std::move(cbc);
+  return cbc;
 }
 
 
@@ -452,67 +347,22 @@ const uint8_t AES_256_CBC::IV[AES_256_CBC::AES_256_IVSIZE] =
     { 'a', 'e', 's', '2', '5', '6', 'i', 'v', '_', 'c', 't', 'r', '1', '3', '3', '7' };
 
 
-#ifdef USE_NSS
-
 bool AES_256_ECB_encrypt(CephContext* cct,
                          const uint8_t* key,
                          size_t key_size,
                          const uint8_t* data_in,
                          uint8_t* data_out,
-                         size_t data_size) {
-  bool result = false;
-  PK11SlotInfo *slot;
-  SECItem keyItem;
-  PK11SymKey *symkey;
-  SECItem *param;
-  SECStatus ret;
-  PK11Context *ectx;
-  int written;
-  unsigned int written2;
+                         size_t data_size)
+{
   if (key_size == AES_256_KEYSIZE) {
-    slot = PK11_GetBestSlot(CKM_AES_ECB, NULL);
-    if (slot) {
-      keyItem.type = siBuffer;
-      keyItem.data = const_cast<uint8_t*>(key);
-      keyItem.len = AES_256_KEYSIZE;
-
-      param = PK11_ParamFromIV(CKM_AES_ECB, NULL);
-      if (param) {
-        symkey = PK11_ImportSymKey(slot, CKM_AES_ECB, PK11_OriginUnwrap, CKA_UNWRAP, &keyItem, NULL);
-        if (symkey) {
-          ectx = PK11_CreateContextBySymKey(CKM_AES_ECB, CKA_ENCRYPT, symkey, param);
-          if (ectx) {
-            ret = PK11_CipherOp(ectx,
-                                data_out, &written, data_size,
-                                data_in, data_size);
-            if (ret == SECSuccess) {
-              ret = PK11_DigestFinal(ectx,
-                                     data_out + written, &written2,
-                                     data_size - written);
-              if (ret == SECSuccess) {
-                result = true;
-              }
-            }
-            PK11_DestroyContext(ectx, PR_TRUE);
-          }
-          PK11_FreeSymKey(symkey);
-        }
-        SECITEM_FreeItem(param, PR_TRUE);
-      }
-      PK11_FreeSlot(slot);
-    }
-    if (result == false) {
-      ldout(cct, 5) << "Failed to perform AES-ECB encryption: " << PR_GetError() << dendl;
-    }
+    return evp_sym_transform<AES_256_KEYSIZE, 0 /* no IV in ECB */>(
+      cct, EVP_aes_256_ecb(),  data_out, data_in, data_size,
+      nullptr /* no IV in ECB */, key, true /* encrypt */);
   } else {
     ldout(cct, 5) << "Key size must be 256 bits long" << dendl;
+    return false;
   }
-  return result;
 }
-
-#else
-# error "No supported crypto implementation found."
-#endif
 
 
 RGWGetObj_BlockDecrypt::RGWGetObj_BlockDecrypt(CephContext* cct,
@@ -567,29 +417,28 @@ int RGWGetObj_BlockDecrypt::fixup_range(off_t& bl_ofs, off_t& bl_end) {
     off_t in_end = bl_end;
 
     size_t i = 0;
-    while (i<parts_len.size() && (in_ofs > (off_t)parts_len[i])) {
+    while (i<parts_len.size() && (in_ofs >= (off_t)parts_len[i])) {
       in_ofs -= parts_len[i];
       i++;
     }
     //in_ofs is inside block i
     size_t j = 0;
-    while (j<parts_len.size() && (in_end > (off_t)parts_len[j])) {
+    while (j<(parts_len.size() - 1) && (in_end >= (off_t)parts_len[j])) {
       in_end -= parts_len[j];
       j++;
     }
-    //in_end is inside block j
+    //in_end is inside part j, OR j is the last part
 
-    size_t rounded_end;
-    rounded_end = ( in_end & ~(block_size - 1) ) + (block_size - 1);
-    if (rounded_end + 1 >= parts_len[j]) {
+    size_t rounded_end = ( in_end & ~(block_size - 1) ) + (block_size - 1);
+    if (rounded_end > parts_len[j]) {
       rounded_end = parts_len[j] - 1;
     }
 
     enc_begin_skip = in_ofs & (block_size - 1);
     ofs = bl_ofs - enc_begin_skip;
     end = bl_end;
-    bl_ofs = bl_ofs - enc_begin_skip;
     bl_end += rounded_end - in_end;
+    bl_ofs = std::min(bl_ofs - enc_begin_skip, bl_end);
   }
   else
   {
@@ -604,31 +453,47 @@ int RGWGetObj_BlockDecrypt::fixup_range(off_t& bl_ofs, off_t& bl_end) {
   return 0;
 }
 
+int RGWGetObj_BlockDecrypt::process(bufferlist& in, size_t part_ofs, size_t size)
+{
+  bufferlist data;
+  if (!crypt->decrypt(in, 0, size, data, part_ofs)) {
+    return -ERR_INTERNAL_ERROR;
+  }
+  off_t send_size = size - enc_begin_skip;
+  if (ofs + enc_begin_skip + send_size > end + 1) {
+    send_size = end + 1 - ofs - enc_begin_skip;
+  }
+  int res = next->handle_data(data, enc_begin_skip, send_size);
+  enc_begin_skip = 0;
+  ofs += size;
+  in.splice(0, size);
+  return res;
+}
 
 int RGWGetObj_BlockDecrypt::handle_data(bufferlist& bl, off_t bl_ofs, off_t bl_len) {
-  int res = 0;
   ldout(cct, 25) << "Decrypt " << bl_len << " bytes" << dendl;
-  size_t part_ofs = ofs;
-  size_t i = 0;
-  while (i<parts_len.size() && (part_ofs >= parts_len[i])) {
-    part_ofs -= parts_len[i];
-    i++;
-  }
   bl.copy(bl_ofs, bl_len, cache);
+
+  int res = 0;
+  size_t part_ofs = ofs;
+  for (size_t part : parts_len) {
+    if (part_ofs >= part) {
+      part_ofs -= part;
+    } else if (part_ofs + cache.length() >= part) {
+      // flush data up to part boundaries, aligned or not
+      res = process(cache, part_ofs, part - part_ofs);
+      if (res < 0) {
+        return res;
+      }
+      part_ofs = 0;
+    } else {
+      break;
+    }
+  }
+  // write up to block boundaries, aligned only
   off_t aligned_size = cache.length() & ~(block_size - 1);
   if (aligned_size > 0) {
-    bufferlist data;
-    if (! crypt->decrypt(cache, 0, aligned_size, data, part_ofs) ) {
-      return -ERR_INTERNAL_ERROR;
-    }
-    off_t send_size = aligned_size - enc_begin_skip;
-    if (ofs + enc_begin_skip + send_size > end + 1) {
-      send_size = end + 1 - ofs - enc_begin_skip;
-    }
-    res = next->handle_data(data, enc_begin_skip, send_size);
-    enc_begin_skip = 0;
-    ofs += aligned_size;
-    cache.splice(0, aligned_size);
+    res = process(cache, part_ofs, aligned_size);
   }
   return res;
 }
@@ -637,211 +502,79 @@ int RGWGetObj_BlockDecrypt::handle_data(bufferlist& bl, off_t bl_ofs, off_t bl_l
  * flush remainder of data to output
  */
 int RGWGetObj_BlockDecrypt::flush() {
+  ldout(cct, 25) << "Decrypt flushing " << cache.length() << " bytes" << dendl;
   int res = 0;
   size_t part_ofs = ofs;
-  size_t i = 0;
-  while (i<parts_len.size() && (part_ofs > parts_len[i])) {
-    part_ofs -= parts_len[i];
-    i++;
+  for (size_t part : parts_len) {
+    if (part_ofs >= part) {
+      part_ofs -= part;
+    } else if (part_ofs + cache.length() >= part) {
+      // flush data up to part boundaries, aligned or not
+      res = process(cache, part_ofs, part - part_ofs);
+      if (res < 0) {
+        return res;
+      }
+      part_ofs = 0;
+    } else {
+      break;
+    }
   }
+  // flush up to block boundaries, aligned or not
   if (cache.length() > 0) {
-    bufferlist data;
-    if (! crypt->decrypt(cache, 0, cache.length(), data, part_ofs) ) {
-      return -ERR_INTERNAL_ERROR;
-    }
-    off_t send_size = cache.length() - enc_begin_skip;
-    if (ofs + enc_begin_skip + send_size > end + 1) {
-      send_size = end + 1 - ofs - enc_begin_skip;
-    }
-    res = next->handle_data(data, enc_begin_skip, send_size);
-    enc_begin_skip = 0;
-    ofs += send_size;
+    res = process(cache, part_ofs, cache.length());
   }
   return res;
 }
 
 RGWPutObj_BlockEncrypt::RGWPutObj_BlockEncrypt(CephContext* cct,
-                                               RGWPutObjDataProcessor* next,
-                                               std::unique_ptr<BlockCrypt> crypt):
-    RGWPutObj_Filter(next),
+                                               rgw::putobj::DataProcessor *next,
+                                               std::unique_ptr<BlockCrypt> crypt)
+  : Pipe(next),
     cct(cct),
     crypt(std::move(crypt)),
-    ofs(0),
-    cache()
+    block_size(this->crypt->get_block_size())
 {
-  block_size = this->crypt->get_block_size();
 }
 
-RGWPutObj_BlockEncrypt::~RGWPutObj_BlockEncrypt() {
-}
+int RGWPutObj_BlockEncrypt::process(bufferlist&& data, uint64_t logical_offset)
+{
+  ldout(cct, 25) << "Encrypt " << data.length() << " bytes" << dendl;
 
-int RGWPutObj_BlockEncrypt::handle_data(bufferlist& bl,
-                                        off_t in_ofs,
-                                        void **phandle,
-                                        rgw_raw_obj *pobj,
-                                        bool *again) {
-  int res = 0;
-  ldout(cct, 25) << "Encrypt " << bl.length() << " bytes" << dendl;
+  // adjust logical offset to beginning of cached data
+  ceph_assert(logical_offset >= cache.length());
+  logical_offset -= cache.length();
 
-  if (*again) {
-    bufferlist no_data;
-    res = next->handle_data(no_data, in_ofs, phandle, pobj, again);
-    //if *again is not set to false, we will have endless loop
-    //drop info on log
-    if (*again) {
-      ldout(cct, 20) << "*again==true" << dendl;
-    }
-    return res;
-  }
+  const bool flush = (data.length() == 0);
+  cache.claim_append(data);
 
-  cache.append(bl);
-  off_t proc_size = cache.length() & ~(block_size - 1);
-  if (bl.length() == 0) {
+  uint64_t proc_size = cache.length() & ~(block_size - 1);
+  if (flush) {
     proc_size = cache.length();
   }
   if (proc_size > 0) {
-    bufferlist data;
-    if (! crypt->encrypt(cache, 0, proc_size, data, ofs) ) {
+    bufferlist in, out;
+    cache.splice(0, proc_size, &in);
+    if (!crypt->encrypt(in, 0, proc_size, out, logical_offset)) {
       return -ERR_INTERNAL_ERROR;
     }
-    res = next->handle_data(data, ofs, phandle, pobj, again);
-    ofs += proc_size;
-    cache.splice(0, proc_size);
-    if (res < 0)
-      return res;
+    int r = Pipe::process(std::move(out), logical_offset);
+    logical_offset += proc_size;
+    if (r < 0)
+      return r;
   }
 
-  if (bl.length() == 0) {
+  if (flush) {
     /*replicate 0-sized handle_data*/
-    res = next->handle_data(bl, ofs, phandle, pobj, again);
+    return Pipe::process({}, logical_offset);
   }
-  return res;
+  return 0;
 }
 
-int RGWPutObj_BlockEncrypt::throttle_data(void *handle,
-                                          const rgw_raw_obj& obj,
-                                          uint64_t size,
-                                          bool need_to_wait) {
-  return next->throttle_data(handle, obj, size, need_to_wait);
-}
 
 std::string create_random_key_selector(CephContext * const cct) {
   char random[AES_256_KEYSIZE];
   cct->random()->get_bytes(&random[0], sizeof(random));
   return std::string(random, sizeof(random));
-}
-
-static int get_barbican_url(CephContext * const cct,
-                     std::string& url)
-{
-  url = cct->_conf->rgw_barbican_url;
-  if (url.empty()) {
-    ldout(cct, 0) << "ERROR: conf rgw_barbican_url is not set" << dendl;
-    return -EINVAL;
-  }
-
-  if (url.back() != '/') {
-    url.append("/");
-  }
-
-  return 0;
-}
-
-static int request_key_from_barbican(CephContext *cct,
-                              boost::string_view key_id,
-                              boost::string_view key_selector,
-                              const std::string& barbican_token,
-                              std::string& actual_key) {
-  std::string secret_url;
-  int res;
-  res = get_barbican_url(cct, secret_url);
-  if (res < 0) {
-     return res;
-  }
-  secret_url += "v1/secrets/" + std::string(key_id);
-
-  bufferlist secret_bl;
-  RGWHTTPTransceiver secret_req(cct, "GET", secret_url, &secret_bl);
-  secret_req.append_header("Accept", "application/octet-stream");
-  secret_req.append_header("X-Auth-Token", barbican_token);
-
-  res = secret_req.process();
-  if (res < 0) {
-    return res;
-  }
-  if (secret_req.get_http_status() ==
-      RGWHTTPTransceiver::HTTP_STATUS_UNAUTHORIZED) {
-    return -EACCES;
-  }
-
-  if (secret_req.get_http_status() >=200 &&
-      secret_req.get_http_status() < 300 &&
-      secret_bl.length() == AES_256_KEYSIZE) {
-    actual_key.assign(secret_bl.c_str(), secret_bl.length());
-    memset(secret_bl.c_str(), 0, secret_bl.length());
-    } else {
-      res = -EACCES;
-    }
-  return res;
-}
-
-static map<string,string> get_str_map(const string &str) {
-  map<string,string> m;
-  get_str_map(str, &m, ";, \t");
-  return m;
-}
-
-static int get_actual_key_from_kms(CephContext *cct,
-                            boost::string_view key_id,
-                            boost::string_view key_selector,
-                            std::string& actual_key)
-{
-  int res = 0;
-  ldout(cct, 20) << "Getting KMS encryption key for key=" << key_id << dendl;
-  static map<string,string> str_map = get_str_map(
-      cct->_conf->rgw_crypt_s3_kms_encryption_keys);
-
-  map<string, string>::iterator it = str_map.find(std::string(key_id));
-  if (it != str_map.end() ) {
-    std::string master_key;
-    try {
-      master_key = from_base64((*it).second);
-    } catch (...) {
-      ldout(cct, 5) << "ERROR: get_actual_key_from_kms invalid encryption key id "
-                    << "which contains character that is not base64 encoded."
-                    << dendl;
-      return -EINVAL;
-    }
-
-    if (master_key.length() == AES_256_KEYSIZE) {
-      uint8_t _actual_key[AES_256_KEYSIZE];
-      if (AES_256_ECB_encrypt(cct,
-          reinterpret_cast<const uint8_t*>(master_key.c_str()), AES_256_KEYSIZE,
-          reinterpret_cast<const uint8_t*>(key_selector.data()),
-          _actual_key, AES_256_KEYSIZE)) {
-        actual_key = std::string((char*)&_actual_key[0], AES_256_KEYSIZE);
-      } else {
-        res = -EIO;
-      }
-      memset(_actual_key, 0, sizeof(_actual_key));
-    } else {
-      ldout(cct, 20) << "Wrong size for key=" << key_id << dendl;
-      res = -EIO;
-    }
-  } else {
-    std::string token;
-    if (rgw::keystone::Service::get_keystone_barbican_token(cct, token) < 0) {
-      ldout(cct, 5) << "Failed to retrieve token for barbican" << dendl;
-      res = -EINVAL;
-      return res;
-    }
-
-    res = request_key_from_barbican(cct, key_id, key_selector, token, actual_key);
-    if (res != 0) {
-      ldout(cct, 5) << "Failed to retrieve secret from barbican:" << key_id << dendl;
-    }
-  }
-  return res;
 }
 
 static inline void set_attr(map<string, bufferlist>& attrs,
@@ -936,7 +669,7 @@ int rgw_s3_prepare_encrypt(struct req_state* s,
         return -ERR_INVALID_ENCRYPTION_ALGORITHM;
       }
       if (s->cct->_conf->rgw_crypt_require_ssl &&
-          !s->info.env->exists("SERVER_PORT_SECURE")) {
+          !rgw_transport_is_secure(s->cct, *s->info.env)) {
         ldout(s->cct, 5) << "ERROR: Insecure request, rgw_crypt_require_ssl is set" << dendl;
         return -ERR_INVALID_REQUEST;
       }
@@ -1034,58 +767,65 @@ int rgw_s3_prepare_encrypt(struct req_state* s,
     boost::string_view req_sse =
         get_crypt_attribute(s->info.env, parts, X_AMZ_SERVER_SIDE_ENCRYPTION);
     if (! req_sse.empty()) {
-      if (req_sse != "aws:kms") {
-        ldout(s->cct, 5) << "ERROR: Invalid value for header x-amz-server-side-encryption"
-                         << dendl;
-        s->err.message = "Server Side Encryption with KMS managed key requires "
-                         "HTTP header x-amz-server-side-encryption : aws:kms";
-        return -EINVAL;
-      }
+
       if (s->cct->_conf->rgw_crypt_require_ssl &&
-          !s->info.env->exists("SERVER_PORT_SECURE")) {
+          !rgw_transport_is_secure(s->cct, *s->info.env)) {
         ldout(s->cct, 5) << "ERROR: insecure request, rgw_crypt_require_ssl is set" << dendl;
         return -ERR_INVALID_REQUEST;
       }
-      boost::string_view key_id =
+
+      if (req_sse == "aws:kms") {
+	boost::string_view key_id =
           get_crypt_attribute(s->info.env, parts, X_AMZ_SERVER_SIDE_ENCRYPTION_AWS_KMS_KEY_ID);
-      if (key_id.empty()) {
-        ldout(s->cct, 5) << "ERROR: not provide a valid key id" << dendl;
-        s->err.message = "Server Side Encryption with KMS managed key requires "
-                         "HTTP header x-amz-server-side-encryption-aws-kms-key-id";
-        return -ERR_INVALID_ACCESS_KEY;
-      }
-      /* try to retrieve actual key */
-      std::string key_selector = create_random_key_selector(s->cct);
-      std::string actual_key;
-      res = get_actual_key_from_kms(s->cct, key_id, key_selector, actual_key);
-      if (res != 0) {
-        ldout(s->cct, 5) << "ERROR: failed to retrieve actual key from key_id: " << key_id << dendl;
-        s->err.message = "Failed to retrieve the actual key, kms-keyid: " + key_id.to_string();
-        return res;
-      }
-      if (actual_key.size() != AES_256_KEYSIZE) {
-        ldout(s->cct, 5) << "ERROR: key obtained from key_id:" <<
+	if (key_id.empty()) {
+	  ldout(s->cct, 5) << "ERROR: not provide a valid key id" << dendl;
+	  s->err.message = "Server Side Encryption with KMS managed key requires "
+	    "HTTP header x-amz-server-side-encryption-aws-kms-key-id";
+	  return -ERR_INVALID_ACCESS_KEY;
+	}
+	/* try to retrieve actual key */
+	std::string key_selector = create_random_key_selector(s->cct);
+	std::string actual_key;
+	res = get_actual_key_from_kms(s->cct, key_id, key_selector, actual_key);
+	if (res != 0) {
+	  ldout(s->cct, 5) << "ERROR: failed to retrieve actual key from key_id: " << key_id << dendl;
+	  s->err.message = "Failed to retrieve the actual key, kms-keyid: " + key_id.to_string();
+	  return res;
+	}
+	if (actual_key.size() != AES_256_KEYSIZE) {
+	  ldout(s->cct, 5) << "ERROR: key obtained from key_id:" <<
             key_id << " is not 256 bit size" << dendl;
-        s->err.message = "KMS provided an invalid key for the given kms-keyid.";
-        return -ERR_INVALID_ACCESS_KEY;
-      }
-      set_attr(attrs, RGW_ATTR_CRYPT_MODE, "SSE-KMS");
-      set_attr(attrs, RGW_ATTR_CRYPT_KEYID, key_id);
-      set_attr(attrs, RGW_ATTR_CRYPT_KEYSEL, key_selector);
+	  s->err.message = "KMS provided an invalid key for the given kms-keyid.";
+	  return -ERR_INVALID_ACCESS_KEY;
+	}
+	set_attr(attrs, RGW_ATTR_CRYPT_MODE, "SSE-KMS");
+	set_attr(attrs, RGW_ATTR_CRYPT_KEYID, key_id);
+	set_attr(attrs, RGW_ATTR_CRYPT_KEYSEL, key_selector);
 
-      if (block_crypt) {
-        auto aes = std::unique_ptr<AES_256_CBC>(new AES_256_CBC(s->cct));
-        aes->set_key(reinterpret_cast<const uint8_t*>(actual_key.c_str()), AES_256_KEYSIZE);
-        *block_crypt = std::move(aes);
-      }
-      actual_key.replace(0, actual_key.length(), actual_key.length(), '\000');
+	if (block_crypt) {
+	  auto aes = std::unique_ptr<AES_256_CBC>(new AES_256_CBC(s->cct));
+	  aes->set_key(reinterpret_cast<const uint8_t*>(actual_key.c_str()), AES_256_KEYSIZE);
+	  *block_crypt = std::move(aes);
+	}
+	actual_key.replace(0, actual_key.length(), actual_key.length(), '\000');
 
-      crypt_http_responses["x-amz-server-side-encryption"] = "aws:kms";
-      crypt_http_responses["x-amz-server-side-encryption-aws-kms-key-id"] = key_id.to_string();
-      return 0;
+	crypt_http_responses["x-amz-server-side-encryption"] = "aws:kms";
+	crypt_http_responses["x-amz-server-side-encryption-aws-kms-key-id"] = key_id.to_string();
+	return 0;
+      } else if (req_sse == "AES256") {
+	/* if a default encryption key was provided, we will use it for SSE-S3 */
+      } else {
+        ldout(s->cct, 5) << "ERROR: Invalid value for header x-amz-server-side-encryption"
+                         << dendl;
+        s->err.message = "Server Side Encryption with KMS managed key requires "
+	  "HTTP header x-amz-server-side-encryption : aws:kms or AES256";
+        return -EINVAL;
+      }
     } else {
+      /* x-amz-server-side-encryption not present or empty */
       boost::string_view key_id =
-          get_crypt_attribute(s->info.env, parts, X_AMZ_SERVER_SIDE_ENCRYPTION_AWS_KMS_KEY_ID);
+	get_crypt_attribute(s->info.env, parts,
+			    X_AMZ_SERVER_SIDE_ENCRYPTION_AWS_KMS_KEY_ID);
       if (!key_id.empty()) {
         ldout(s->cct, 5) << "ERROR: SSE-KMS encryption request is missing the header "
                          << "x-amz-server-side-encryption"
@@ -1125,7 +865,7 @@ int rgw_s3_prepare_encrypt(struct req_state* s,
                               reinterpret_cast<const uint8_t*>(master_encryption_key.c_str()), AES_256_KEYSIZE,
                               reinterpret_cast<const uint8_t*>(key_selector.c_str()),
                               actual_key, AES_256_KEYSIZE) != true) {
-        memset(actual_key, 0, sizeof(actual_key));
+        ::ceph::crypto::zeroize_for_security(actual_key, sizeof(actual_key));
         return -EIO;
       }
       if (block_crypt) {
@@ -1133,7 +873,7 @@ int rgw_s3_prepare_encrypt(struct req_state* s,
         aes->set_key(reinterpret_cast<const uint8_t*>(actual_key), AES_256_KEYSIZE);
         *block_crypt = std::move(aes);
       }
-      memset(actual_key, 0, sizeof(actual_key));
+      ::ceph::crypto::zeroize_for_security(actual_key, sizeof(actual_key));
       return 0;
     }
   }
@@ -1158,7 +898,7 @@ int rgw_s3_prepare_decrypt(struct req_state* s,
 
   if (stored_mode == "SSE-C-AES256") {
     if (s->cct->_conf->rgw_crypt_require_ssl &&
-        !s->info.env->exists("SERVER_PORT_SECURE")) {
+        !rgw_transport_is_secure(s->cct, *s->info.env)) {
       ldout(s->cct, 5) << "ERROR: Insecure request, rgw_crypt_require_ssl is set" << dendl;
       return -ERR_INVALID_REQUEST;
     }
@@ -1240,7 +980,7 @@ int rgw_s3_prepare_decrypt(struct req_state* s,
 
   if (stored_mode == "SSE-KMS") {
     if (s->cct->_conf->rgw_crypt_require_ssl &&
-        !s->info.env->exists("SERVER_PORT_SECURE")) {
+        !rgw_transport_is_secure(s->cct, *s->info.env)) {
       ldout(s->cct, 5) << "ERROR: Insecure request, rgw_crypt_require_ssl is set" << dendl;
       return -ERR_INVALID_REQUEST;
     }
@@ -1298,12 +1038,12 @@ int rgw_s3_prepare_decrypt(struct req_state* s,
                             AES_256_KEYSIZE,
                             reinterpret_cast<const uint8_t*>(attr_key_selector.c_str()),
                             actual_key, AES_256_KEYSIZE) != true) {
-      memset(actual_key, 0, sizeof(actual_key));
+      ::ceph::crypto::zeroize_for_security(actual_key, sizeof(actual_key));
       return -EIO;
     }
     auto aes = std::unique_ptr<AES_256_CBC>(new AES_256_CBC(s->cct));
     aes->set_key(actual_key, AES_256_KEYSIZE);
-    memset(actual_key, 0, sizeof(actual_key));
+    ::ceph::crypto::zeroize_for_security(actual_key, sizeof(actual_key));
     if (block_crypt) *block_crypt = std::move(aes);
     return 0;
   }

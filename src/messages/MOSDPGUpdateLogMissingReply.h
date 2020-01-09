@@ -19,9 +19,9 @@
 #include "MOSDFastDispatchOp.h"
 
 class MOSDPGUpdateLogMissingReply : public MOSDFastDispatchOp {
-
-  static const int HEAD_VERSION = 3;
-  static const int COMPAT_VERSION = 1;
+private:
+  static constexpr int HEAD_VERSION = 3;
+  static constexpr int COMPAT_VERSION = 1;
 
 
 public:
@@ -50,11 +50,9 @@ public:
   }
 
   MOSDPGUpdateLogMissingReply()
-    : MOSDFastDispatchOp(
-      MSG_OSD_PG_UPDATE_LOG_MISSING_REPLY,
-      HEAD_VERSION,
-      COMPAT_VERSION)
-      {}
+    : MOSDFastDispatchOp{MSG_OSD_PG_UPDATE_LOG_MISSING_REPLY, HEAD_VERSION,
+			 COMPAT_VERSION}
+  {}
   MOSDPGUpdateLogMissingReply(
     spg_t pgid,
     shard_id_t from,
@@ -62,10 +60,8 @@ public:
     epoch_t min_epoch,
     ceph_tid_t rep_tid,
     eversion_t last_complete_ondisk)
-    : MOSDFastDispatchOp(
-        MSG_OSD_PG_UPDATE_LOG_MISSING_REPLY,
-        HEAD_VERSION,
-        COMPAT_VERSION),
+    : MOSDFastDispatchOp{MSG_OSD_PG_UPDATE_LOG_MISSING_REPLY, HEAD_VERSION,
+			 COMPAT_VERSION},
       map_epoch(epoch),
       min_epoch(min_epoch),
       pgid(pgid),
@@ -78,7 +74,7 @@ private:
   ~MOSDPGUpdateLogMissingReply() override {}
 
 public:
-  const char *get_type_name() const override { return "PGUpdateLogMissingReply"; }
+  std::string_view get_type_name() const override { return "PGUpdateLogMissingReply"; }
   void print(ostream& out) const override {
     out << "pg_update_log_missing_reply(" << pgid << " epoch " << map_epoch
 	<< "/" << min_epoch
@@ -110,6 +106,9 @@ public:
       decode(last_complete_ondisk, p);
     }
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

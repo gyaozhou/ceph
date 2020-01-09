@@ -3,16 +3,8 @@ meta:
 overrides:
   ceph:
     conf:
-      # override to make these names predictable
-      client.mirror.4:
-        admin socket: /var/run/ceph/rbd-mirror.$cluster-$name.asok
-        pid file: /var/run/ceph/rbd-mirror.$cluster-$name.pid
-      client.mirror.5:
-        admin socket: /var/run/ceph/rbd-mirror.$cluster-$name.asok
-        pid file: /var/run/ceph/rbd-mirror.$cluster-$name.pid
-      client.mirror.6:
-        admin socket: /var/run/ceph/rbd-mirror.$cluster-$name.asok
-        pid file: /var/run/ceph/rbd-mirror.$cluster-$name.pid
+      client:
+        rbd mirror image policy type: none
 tasks:
 - workunit:
     clients:

@@ -4,6 +4,7 @@
     user create                create a new user
     user modify                modify user
     user info                  get user info
+    user rename                rename user
     user rm                    remove user
     user suspend               suspend a user
     user enable                re-enable user after suspension
@@ -17,13 +18,15 @@
     subuser rm                 remove subuser
     key create                 create access key
     key rm                     remove access key
-    bucket list                list buckets
+    bucket list                list buckets (specify --allow-unordered for
+                               faster, unsorted listing)
     bucket limit check         show bucket sharding stats
     bucket link                link bucket to specified user
     bucket unlink              unlink bucket from specified user
     bucket stats               returns bucket statistics
     bucket rm                  remove bucket
     bucket check               check bucket index
+    bucket chown               link bucket to specified user and update its object ACLs
     bucket reshard             reshard bucket
     bucket rewrite             rewrite all objects in the specified bucket
     bucket sync disable        disable bucket sync
@@ -33,10 +36,13 @@
     bi list                    list raw bucket index entries
     bi purge                   purge bucket index entries
     object rm                  remove object
+    object put                 put object
     object stat                stat an object for its metadata
     object unlink              unlink object from bucket index
     object rewrite             rewrite the specified object
     objects expire             run expired objects cleanup
+    objects expire-stale list  list stale expired objects (caused by reshard)
+    objects expire-stale rm    remove stale expired objects
     period rm                  remove a period
     period get                 get period info
     period get-current         get current period info
@@ -65,7 +71,7 @@
     zonegroup add              add a zone to a zonegroup
     zonegroup create           create a new zone group info
     zonegroup default          set default zone group
-    zonegroup rm               remove a zone group info
+    zonegroup delete           delete a zone group info
     zonegroup get              show zone group info
     zonegroup modify           modify an existing zonegroup
     zonegroup set              set zone group info (requires infile)
@@ -104,15 +110,17 @@
                                (NOTE: required to specify formatting of date
                                to "YYYY-MM-DD-hh")
     log rm                     remove log object
-    usage show                 show usage (by user, date range)
-    usage trim                 trim usage (by user, date range)
+    usage show                 show usage (by user, by bucket, date range)
+    usage trim                 trim usage (by user, by bucket, date range)
     usage clear                reset all the usage stats for the cluster
     gc list                    dump expired garbage collection objects (specify
                                --include-all to list all entries, including unexpired)
     gc process                 manually process garbage (specify
                                --include-all to process all entries, including unexpired)
     lc list                    list all bucket lifecycle progress
+    lc get                     get a lifecycle bucket configuration
     lc process                 manually process lifecycle
+    lc reshard fix             fix LC for a resharded bucket
     metadata get               get metadata info
     metadata put               put metadata info
     metadata rm                remove metadata info
@@ -123,14 +131,10 @@
     mdlog status               read metadata log status
     bilog list                 list bucket index log
     bilog trim                 trim bucket index log (use start-marker, end-marker)
+    bilog status               read bucket index log status
     datalog list               list data log
     datalog trim               trim data log
     datalog status             read data log status
-    opstate list               list stateful operations entries (use client_id,
-                               op_id, object)
-    opstate set                set state on an entry (use client_id, op_id, object, state)
-    opstate renew              renew state on an entry (use client_id, op_id, object)
-    opstate rm                 remove entry (use client_id, op_id, object)
     orphans find               init and run search for leaked rados objects (use job-id, pool)
     orphans finish             clean up search for leaked rados objects
     orphans list-jobs          list the current job-ids for orphans search
@@ -148,11 +152,20 @@
     reshard status             read bucket resharding status
     reshard process            process of scheduled reshard jobs
     reshard cancel             cancel resharding a bucket
+    reshard stale-instances list list stale-instances from bucket resharding
+    reshard stale-instances rm   cleanup stale-instances from bucket resharding
     sync error list            list sync error
     sync error trim            trim sync error
+    mfa create                 create a new MFA TOTP token
+    mfa list                   list MFA TOTP tokens
+    mfa get                    show MFA TOTP token
+    mfa remove                 delete MFA TOTP token
+    mfa check                  check MFA TOTP token
+    mfa resync                 re-sync MFA TOTP token
   options:
      --tenant=<tenant>         tenant name
      --uid=<id>                user id
+     --new-uid=<id>            new user id
      --subuser=<name>          subuser name
      --access-key=<key>        S3 access key
      --email=<email>           user's email address
@@ -168,13 +181,17 @@
      --max-buckets             max number of buckets for a user
      --admin                   set the admin flag on the user
      --system                  set the system flag on the user
+     --op-mask                 set the op mask on the user
      --bucket=<bucket>         Specify the bucket name. Also used by the quota command.
      --pool=<pool>             Specify the pool name. Also used to scan for leaked rados objects.
      --object=<object>         object name
+     --object-version=<version>         object version
      --date=<date>             date in the format yyyy-mm-dd
      --start-date=<date>       start date in the format yyyy-mm-dd
      --end-date=<date>         end date in the format yyyy-mm-dd
      --bucket-id=<bucket-id>   bucket id
+     --bucket-new-name=<bucket>
+                               for bucket link: optional new name
      --shard-id=<shard-id>     optional for: 
                                  mdlog list
                                  data sync status
@@ -205,6 +222,7 @@
      --read-only               set zone as read-only (when adding to zonegroup)
      --redirect-zone           specify zone id to redirect when response is 404 (not found)
      --placement-id            placement id for zonegroup placement commands
+     --storage-class           storage class for zonegroup placement commands
      --tags=<list>             list of tags for zonegroup placement add and modify commands
      --tags-add=<list>         list of tags to add for zonegroup placement modify command
      --tags-rm=<list>          list of tags to remove for zonegroup placement modify command
@@ -244,9 +262,9 @@
      --skip-zero-entries       log show only dumps entries that don't have zero value
                                in one of the numeric field
      --infile=<file>           specify a file to read in when setting data
-     --state=<state>           specify a state for the opstate set command
      --categories=<list>       comma separated list of categories, used in usage show
      --caps=<caps>             list of caps (e.g., "usage=read, write; user=read")
+     --op-mask=<op-mask>       permission of user's operations (e.g., "read, write, delete, *")
      --yes-i-really-mean-it    required for certain operations
      --warnings-only           when specified with bucket limit check, list
                                only buckets nearing or over the current max
@@ -258,6 +276,9 @@
      --min-rewrite-size        min object size for bucket rewrite (default 4M)
      --max-rewrite-size        max object size for bucket rewrite (default ULLONG_MAX)
      --min-rewrite-stripe-size min stripe size for object rewrite (default 0)
+     --trim-delay-ms           time interval in msec to limit the frequency of sync error log entries trimming operations,
+                               the trimming process will sleep the specified msec for every 1000 entries trimmed
+     --max-concurrent-ios      maximum concurrent ios for bucket operations (default: 32)
   
   <date> := "YYYY-MM-DD[ hh:mm:ss]"
   
@@ -270,7 +291,7 @@
      --num-shards              num of shards to use for keeping the temporary scan info
      --orphan-stale-secs       num of seconds to wait before declaring an object to be an orphan (default: 86400)
      --job-id                  set the job id (for orphans find)
-     --max-concurrent-ios      maximum concurrent ios for orphans find (default: 32)
+     --detail                  detailed mode, log and stat head objects as well
   
   Orphans list-jobs options:
      --extra-info              provide extra info in job list
@@ -282,6 +303,13 @@
      --policy-name             name of the policy document
      --policy-doc              permission policy document
      --path-prefix             path prefix for filtering roles
+  
+  MFA options:
+     --totp-serial             a string that represents the ID of a TOTP token
+     --totp-seed               the secret seed that is used to calculate the TOTP
+     --totp-seconds            the time resolution that is being used for TOTP generation
+     --totp-window             the number of TOTP tokens that are checked before and after the current token when validating token
+     --totp-pin                the valid value of a TOTP token at a certain time
   
     --conf/-c FILE    read configuration from the given configuration file
     --id ID           set ID portion of my name

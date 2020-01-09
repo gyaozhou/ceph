@@ -4,14 +4,15 @@
 #ifndef CEPH_TEST_LIBRBD_MOCK_JOURNAL_H
 #define CEPH_TEST_LIBRBD_MOCK_JOURNAL_H
 
+#include "common/RefCountedObj.h"
 #include "gmock/gmock.h"
+#include "include/rados/librados_fwd.hpp"
 #include "librbd/Journal.h"
 #include "librbd/journal/Types.h"
 #include <list>
 
 struct Context;
 struct ContextWQ;
-namespace librados { class IoCtx; }
 
 namespace librbd {
 
@@ -20,7 +21,7 @@ struct ImageCtx;
 struct MockJournal {
   static MockJournal *s_instance;
   static MockJournal *get_instance() {
-    assert(s_instance != nullptr);
+    ceph_assert(s_instance != nullptr);
     return s_instance;
   }
 
@@ -40,6 +41,9 @@ struct MockJournal {
   MockJournal() {
     s_instance = this;
   }
+
+  void get() {}
+  void put() {}
 
   MOCK_CONST_METHOD0(is_journal_ready, bool());
   MOCK_CONST_METHOD0(is_journal_replaying, bool());
@@ -64,6 +68,8 @@ struct MockJournal {
   MOCK_CONST_METHOD0(get_tag_data, journal::TagData());
 
   MOCK_METHOD0(allocate_op_tid, uint64_t());
+
+  MOCK_METHOD0(user_flushed, void());
 
   MOCK_METHOD3(append_op_event_mock, void(uint64_t, const journal::EventEntry&,
                                           Context *));

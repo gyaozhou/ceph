@@ -10,6 +10,7 @@
 #include "include/encoding.h"
 #include "include/stringify.h"
 #include "include/utime.h"
+#include "msg/msg_types.h"
 #include <iosfwd>
 #include <string>
 #include <set>
@@ -68,22 +69,49 @@ inline void decode(GroupImageLinkState &state, bufferlist::const_iterator& it)
   state = static_cast<GroupImageLinkState>(int_state);
 }
 
+enum MirrorPeerDirection {
+  MIRROR_PEER_DIRECTION_RX    = 0,
+  MIRROR_PEER_DIRECTION_TX    = 1,
+  MIRROR_PEER_DIRECTION_RX_TX = 2
+};
+
+std::ostream& operator<<(std::ostream& os,
+                         MirrorPeerDirection mirror_peer_direction);
+
 struct MirrorPeer {
   MirrorPeer() {
   }
-  MirrorPeer(const std::string &uuid, const std::string &cluster_name,
-             const std::string &client_name, int64_t pool_id)
-    : uuid(uuid), cluster_name(cluster_name), client_name(client_name),
-      pool_id(pool_id) {
+  MirrorPeer(const std::string &uuid,
+             MirrorPeerDirection mirror_peer_direction,
+             const std::string& site_name,
+             const std::string& client_name,
+             const std::string& fsid)
+    : uuid(uuid), mirror_peer_direction(mirror_peer_direction),
+      site_name(site_name), client_name(client_name), fsid(fsid) {
   }
 
   std::string uuid;
-  std::string cluster_name;
-  std::string client_name;
-  int64_t pool_id = -1;
+
+  MirrorPeerDirection mirror_peer_direction = MIRROR_PEER_DIRECTION_RX_TX;
+  std::string site_name;
+  std::string client_name;  // RX property
+  std::string fsid;
+  utime_t last_seen;
 
   inline bool is_valid() const {
-    return (!uuid.empty() && !cluster_name.empty() && !client_name.empty());
+    switch (mirror_peer_direction) {
+    case MIRROR_PEER_DIRECTION_TX:
+      break;
+    case MIRROR_PEER_DIRECTION_RX:
+    case MIRROR_PEER_DIRECTION_RX_TX:
+      if (client_name.empty()) {
+        return false;
+      }
+      break;
+    default:
+      return false;
+    }
+    return (!uuid.empty() && !site_name.empty());
   }
 
   void encode(bufferlist &bl) const;
@@ -93,12 +121,20 @@ struct MirrorPeer {
   static void generate_test_instances(std::list<MirrorPeer*> &o);
 
   bool operator==(const MirrorPeer &rhs) const;
+  bool operator!=(const MirrorPeer &rhs) const {
+    return (!(*this == rhs));
+  }
 };
 
 std::ostream& operator<<(std::ostream& os, const MirrorMode& mirror_mode);
 std::ostream& operator<<(std::ostream& os, const MirrorPeer& peer);
 
 WRITE_CLASS_ENCODER(MirrorPeer);
+
+enum MirrorImageMode {
+  MIRROR_IMAGE_MODE_JOURNAL  = 0,
+  MIRROR_IMAGE_MODE_SNAPSHOT = 1,
+};
 
 enum MirrorImageState {
   MIRROR_IMAGE_STATE_DISABLING = 0,
@@ -107,10 +143,14 @@ enum MirrorImageState {
 };
 
 struct MirrorImage {
-  MirrorImage() {}
-  MirrorImage(const std::string &global_image_id, MirrorImageState state)
-    : global_image_id(global_image_id), state(state) {}
+  MirrorImage() {
+  }
+  MirrorImage(MirrorImageMode mode, const std::string &global_image_id,
+              MirrorImageState state)
+    : mode(mode), global_image_id(global_image_id), state(state) {
+  }
 
+  MirrorImageMode mode = MIRROR_IMAGE_MODE_JOURNAL;
   std::string global_image_id;
   MirrorImageState state = MIRROR_IMAGE_STATE_DISABLING;
 
@@ -124,6 +164,7 @@ struct MirrorImage {
   bool operator<(const MirrorImage &rhs) const;
 };
 
+std::ostream& operator<<(std::ostream& os, const MirrorImageMode& mirror_mode);
 std::ostream& operator<<(std::ostream& os, const MirrorImageState& mirror_state);
 std::ostream& operator<<(std::ostream& os, const MirrorImage& mirror_image);
 
@@ -146,7 +187,8 @@ inline void encode(const MirrorImageStatusState &state, bufferlist& bl,
   encode(static_cast<uint8_t>(state), bl);
 }
 
-inline void decode(MirrorImageStatusState &state, bufferlist::const_iterator& it)
+inline void decode(MirrorImageStatusState &state,
+                   bufferlist::const_iterator& it)
 {
   uint8_t int_state;
   using ceph::decode;
@@ -154,16 +196,26 @@ inline void decode(MirrorImageStatusState &state, bufferlist::const_iterator& it
   state = static_cast<MirrorImageStatusState>(int_state);
 }
 
-struct MirrorImageStatus {
-  MirrorImageStatus() {}
-  MirrorImageStatus(MirrorImageStatusState state,
-		    const std::string &description = "")
-    : state(state), description(description) {}
+std::ostream& operator<<(std::ostream& os, const MirrorImageStatusState& state);
 
+struct MirrorImageSiteStatus {
+  static const std::string LOCAL_FSID;
+
+  MirrorImageSiteStatus() {}
+  MirrorImageSiteStatus(const std::string& fsid,
+                        MirrorImageStatusState state,
+                        const std::string &description)
+    : fsid(fsid), state(state), description(description) {
+  }
+
+  std::string fsid = LOCAL_FSID;
   MirrorImageStatusState state = MIRROR_IMAGE_STATUS_STATE_UNKNOWN;
   std::string description;
   utime_t last_update;
   bool up = false;
+
+  void encode_meta(uint8_t version, bufferlist &bl) const;
+  void decode_meta(uint8_t version, bufferlist::const_iterator &it);
 
   void encode(bufferlist &bl) const;
   void decode(bufferlist::const_iterator &it);
@@ -171,23 +223,105 @@ struct MirrorImageStatus {
 
   std::string state_to_string() const;
 
-  static void generate_test_instances(std::list<MirrorImageStatus*> &o);
+  bool operator==(const MirrorImageSiteStatus &rhs) const;
 
-  bool operator==(const MirrorImageStatus &rhs) const;
+  static void generate_test_instances(std::list<MirrorImageSiteStatus*> &o);
 };
+WRITE_CLASS_ENCODER(MirrorImageSiteStatus);
+
+std::ostream& operator<<(std::ostream& os, const MirrorImageSiteStatus& status);
+
+struct MirrorImageSiteStatusOnDisk : cls::rbd::MirrorImageSiteStatus {
+  entity_inst_t origin;
+
+  MirrorImageSiteStatusOnDisk() {
+  }
+  MirrorImageSiteStatusOnDisk(const cls::rbd::MirrorImageSiteStatus &status) :
+    cls::rbd::MirrorImageSiteStatus(status) {
+  }
+
+  void encode_meta(bufferlist &bl, uint64_t features) const;
+  void decode_meta(bufferlist::const_iterator &it);
+
+  void encode(bufferlist &bl, uint64_t features) const;
+  void decode(bufferlist::const_iterator &it);
+
+  static void generate_test_instances(
+      std::list<MirrorImageSiteStatusOnDisk*> &o);
+};
+WRITE_CLASS_ENCODER_FEATURES(MirrorImageSiteStatusOnDisk)
+
+struct MirrorImageStatus {
+  typedef std::list<MirrorImageSiteStatus> MirrorImageSiteStatuses;
+
+  MirrorImageStatus() {}
+  MirrorImageStatus(const MirrorImageSiteStatuses& statuses)
+    : mirror_image_site_statuses(statuses) {
+  }
+
+  MirrorImageSiteStatuses mirror_image_site_statuses;
+
+  int get_local_mirror_image_site_status(MirrorImageSiteStatus* status) const;
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::const_iterator &it);
+  void dump(Formatter *f) const;
+
+  bool operator==(const MirrorImageStatus& rhs) const;
+
+  static void generate_test_instances(std::list<MirrorImageStatus*> &o);
+};
+WRITE_CLASS_ENCODER(MirrorImageStatus);
 
 std::ostream& operator<<(std::ostream& os, const MirrorImageStatus& status);
-std::ostream& operator<<(std::ostream& os, const MirrorImageStatusState& state);
 
-WRITE_CLASS_ENCODER(MirrorImageStatus);
+struct ParentImageSpec {
+  int64_t pool_id = -1;
+  std::string pool_namespace;
+  std::string image_id;
+  snapid_t snap_id = CEPH_NOSNAP;
+
+  ParentImageSpec() {
+  }
+  ParentImageSpec(int64_t pool_id, const std::string& pool_namespace,
+                  const std::string& image_id, snapid_t snap_id)
+    : pool_id(pool_id), pool_namespace(pool_namespace), image_id(image_id),
+      snap_id(snap_id) {
+  }
+
+  bool exists() const {
+    return (pool_id >= 0 && !image_id.empty() && snap_id != CEPH_NOSNAP);
+  }
+
+  bool operator==(const ParentImageSpec& rhs) const {
+    return ((pool_id == rhs.pool_id) &&
+            (pool_namespace == rhs.pool_namespace) &&
+            (image_id == rhs.image_id) &&
+            (snap_id == rhs.snap_id));
+  }
+
+  bool operator!=(const ParentImageSpec& rhs) const {
+    return !(*this == rhs);
+  }
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::const_iterator &it);
+  void dump(Formatter *f) const;
+
+  static void generate_test_instances(std::list<ParentImageSpec*> &o);
+};
+
+WRITE_CLASS_ENCODER(ParentImageSpec);
 
 struct ChildImageSpec {
   int64_t pool_id = -1;
+  std::string pool_namespace;
   std::string image_id;
 
   ChildImageSpec() {}
-  ChildImageSpec(int64_t pool_id, const std::string& image_id)
-    : pool_id(pool_id), image_id(image_id) {
+  ChildImageSpec(int64_t pool_id, const std::string& pool_namespace,
+                 const std::string& image_id)
+    : pool_id(pool_id), pool_namespace(pool_namespace), image_id(image_id) {
   }
 
   void encode(bufferlist &bl) const;
@@ -198,11 +332,15 @@ struct ChildImageSpec {
 
   inline bool operator==(const ChildImageSpec& rhs) const {
     return (pool_id == rhs.pool_id &&
+            pool_namespace == rhs.pool_namespace &&
             image_id == rhs.image_id);
   }
   inline bool operator<(const ChildImageSpec& rhs) const {
     if (pool_id != rhs.pool_id) {
       return pool_id < rhs.pool_id;
+    }
+    if (pool_namespace != rhs.pool_namespace) {
+      return pool_namespace < rhs.pool_namespace;
     }
     return image_id < rhs.image_id;
   }
@@ -277,9 +415,11 @@ struct GroupSpec {
 WRITE_CLASS_ENCODER(GroupSpec);
 
 enum SnapshotNamespaceType {
-  SNAPSHOT_NAMESPACE_TYPE_USER  = 0,
-  SNAPSHOT_NAMESPACE_TYPE_GROUP = 1,
-  SNAPSHOT_NAMESPACE_TYPE_TRASH = 2
+  SNAPSHOT_NAMESPACE_TYPE_USER               = 0,
+  SNAPSHOT_NAMESPACE_TYPE_GROUP              = 1,
+  SNAPSHOT_NAMESPACE_TYPE_TRASH              = 2,
+  SNAPSHOT_NAMESPACE_TYPE_MIRROR_PRIMARY     = 3,
+  SNAPSHOT_NAMESPACE_TYPE_MIRROR_NON_PRIMARY = 4,
 };
 
 struct UserSnapshotNamespace {
@@ -367,6 +507,80 @@ struct TrashSnapshotNamespace {
   }
 };
 
+struct MirrorPrimarySnapshotNamespace {
+  static const SnapshotNamespaceType SNAPSHOT_NAMESPACE_TYPE =
+    SNAPSHOT_NAMESPACE_TYPE_MIRROR_PRIMARY;
+
+  bool demoted = false;
+  std::set<std::string> mirror_peer_uuids;
+
+  MirrorPrimarySnapshotNamespace() {
+  }
+  MirrorPrimarySnapshotNamespace(bool demoted,
+                                 const std::set<std::string> &mirror_peer_uuids)
+    : demoted(demoted), mirror_peer_uuids(mirror_peer_uuids) {
+  }
+
+  void encode(bufferlist& bl) const;
+  void decode(bufferlist::const_iterator& it);
+
+  void dump(Formatter *f) const;
+
+  inline bool operator==(const MirrorPrimarySnapshotNamespace& mpsn) const {
+    return demoted == mpsn.demoted &&
+           mirror_peer_uuids == mpsn.mirror_peer_uuids;
+  }
+
+  inline bool operator<(const MirrorPrimarySnapshotNamespace& mpsn) const {
+    if (demoted != mpsn.demoted) {
+      return demoted < mpsn.demoted;
+    }
+    return mirror_peer_uuids < mpsn.mirror_peer_uuids;
+  }
+};
+
+struct MirrorNonPrimarySnapshotNamespace {
+  static const SnapshotNamespaceType SNAPSHOT_NAMESPACE_TYPE =
+    SNAPSHOT_NAMESPACE_TYPE_MIRROR_NON_PRIMARY;
+
+  std::string primary_mirror_uuid;
+  snapid_t primary_snap_id = CEPH_NOSNAP;
+  bool copied = false;
+  uint64_t last_copied_object_number = 0;
+
+  MirrorNonPrimarySnapshotNamespace() {
+  }
+  MirrorNonPrimarySnapshotNamespace(const std::string &primary_mirror_uuid,
+                                    snapid_t primary_snap_id)
+    : primary_mirror_uuid(primary_mirror_uuid),
+      primary_snap_id(primary_snap_id) {
+  }
+
+  void encode(bufferlist& bl) const;
+  void decode(bufferlist::const_iterator& it);
+
+  void dump(Formatter *f) const;
+
+  inline bool operator==(const MirrorNonPrimarySnapshotNamespace& mnsn) const {
+    return primary_mirror_uuid == mnsn.primary_mirror_uuid &&
+           primary_snap_id == mnsn.primary_snap_id && copied == mnsn.copied &&
+           last_copied_object_number == mnsn.last_copied_object_number;
+  }
+
+  inline bool operator<(const MirrorNonPrimarySnapshotNamespace& mnsn) const {
+    if (primary_mirror_uuid != mnsn.primary_mirror_uuid) {
+      return primary_mirror_uuid < mnsn.primary_mirror_uuid;
+    }
+    if (primary_snap_id != mnsn.primary_snap_id) {
+      return primary_snap_id < mnsn.primary_snap_id;
+    }
+    if (copied != mnsn.copied) {
+      return copied < mnsn.copied;
+    }
+    return last_copied_object_number < mnsn.last_copied_object_number;
+  }
+};
+
 struct UnknownSnapshotNamespace {
   static const SnapshotNamespaceType SNAPSHOT_NAMESPACE_TYPE =
     static_cast<SnapshotNamespaceType>(-1);
@@ -390,11 +604,17 @@ std::ostream& operator<<(std::ostream& os, const SnapshotNamespaceType& type);
 std::ostream& operator<<(std::ostream& os, const UserSnapshotNamespace& ns);
 std::ostream& operator<<(std::ostream& os, const GroupSnapshotNamespace& ns);
 std::ostream& operator<<(std::ostream& os, const TrashSnapshotNamespace& ns);
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorPrimarySnapshotNamespace& ns);
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorNonPrimarySnapshotNamespace& ns);
 std::ostream& operator<<(std::ostream& os, const UnknownSnapshotNamespace& ns);
 
 typedef boost::variant<UserSnapshotNamespace,
                        GroupSnapshotNamespace,
                        TrashSnapshotNamespace,
+                       MirrorPrimarySnapshotNamespace,
+                       MirrorNonPrimarySnapshotNamespace,
                        UnknownSnapshotNamespace> SnapshotNamespaceVariant;
 
 struct SnapshotNamespace : public SnapshotNamespaceVariant {
@@ -416,6 +636,9 @@ struct SnapshotNamespace : public SnapshotNamespaceVariant {
   }
   inline bool operator<(const SnapshotNamespaceVariant& sn) const {
     return static_cast<const SnapshotNamespaceVariant&>(*this) < sn;
+  }
+  inline bool operator!=(const SnapshotNamespaceVariant& sn) const {
+    return !(*this == sn);
   }
 };
 WRITE_CLASS_ENCODER(SnapshotNamespace);
@@ -513,8 +736,33 @@ struct GroupSnapshot {
 WRITE_CLASS_ENCODER(GroupSnapshot);
 enum TrashImageSource {
   TRASH_IMAGE_SOURCE_USER = 0,
-  TRASH_IMAGE_SOURCE_MIRRORING = 1
+  TRASH_IMAGE_SOURCE_MIRRORING = 1,
+  TRASH_IMAGE_SOURCE_MIGRATION = 2,
+  TRASH_IMAGE_SOURCE_REMOVING = 3,
+  TRASH_IMAGE_SOURCE_USER_PARENT= 4,
 };
+
+inline std::ostream& operator<<(std::ostream& os,
+                                const TrashImageSource& source) {
+  switch (source) {
+  case TRASH_IMAGE_SOURCE_USER:
+    os << "user";
+    break;
+  case TRASH_IMAGE_SOURCE_MIRRORING:
+    os << "mirroring";
+    break;
+  case TRASH_IMAGE_SOURCE_MIGRATION:
+    os << "migration";
+    break;
+  case TRASH_IMAGE_SOURCE_REMOVING:
+    os << "removing";
+    break;
+  default:
+    os << "unknown (" << static_cast<uint32_t>(source) << ")";
+    break;
+  }
+  return os;
+}
 
 inline void encode(const TrashImageSource &source, bufferlist& bl,
 		   uint64_t features=0)
@@ -531,11 +779,33 @@ inline void decode(TrashImageSource &source, bufferlist::const_iterator& it)
   source = static_cast<TrashImageSource>(int_source);
 }
 
+enum TrashImageState {
+  TRASH_IMAGE_STATE_NORMAL    = 0,
+  TRASH_IMAGE_STATE_MOVING    = 1,
+  TRASH_IMAGE_STATE_REMOVING  = 2,
+  TRASH_IMAGE_STATE_RESTORING = 3
+};
+
+inline void encode(const TrashImageState &state, bufferlist &bl)
+{
+  using ceph::encode;
+  encode(static_cast<uint8_t>(state), bl);
+}
+
+inline void decode(TrashImageState &state, bufferlist::const_iterator &it)
+{
+  uint8_t int_state;
+  using ceph::decode;
+  decode(int_state, it);
+  state = static_cast<TrashImageState>(int_state);
+}
+
 struct TrashImageSpec {
   TrashImageSource source = TRASH_IMAGE_SOURCE_USER;
   std::string name;
   utime_t deletion_time; // time of deletion
   utime_t deferment_end_time;
+  TrashImageState state = TRASH_IMAGE_STATE_NORMAL;
 
   TrashImageSpec() {}
   TrashImageSpec(TrashImageSource source, const std::string &name,
@@ -586,6 +856,117 @@ struct MirrorImageMap {
 std::ostream& operator<<(std::ostream& os, const MirrorImageMap &image_map);
 
 WRITE_CLASS_ENCODER(MirrorImageMap);
+
+enum MigrationHeaderType {
+  MIGRATION_HEADER_TYPE_SRC = 1,
+  MIGRATION_HEADER_TYPE_DST = 2,
+};
+
+inline void encode(const MigrationHeaderType &type, bufferlist& bl) {
+  using ceph::encode;
+  encode(static_cast<uint8_t>(type), bl);
+}
+
+inline void decode(MigrationHeaderType &type, bufferlist::const_iterator& it) {
+  uint8_t int_type;
+  using ceph::decode;
+  decode(int_type, it);
+  type = static_cast<MigrationHeaderType>(int_type);
+}
+
+enum MigrationState {
+  MIGRATION_STATE_ERROR = 0,
+  MIGRATION_STATE_PREPARING = 1,
+  MIGRATION_STATE_PREPARED = 2,
+  MIGRATION_STATE_EXECUTING = 3,
+  MIGRATION_STATE_EXECUTED = 4,
+};
+
+inline void encode(const MigrationState &state, bufferlist& bl) {
+  using ceph::encode;
+  encode(static_cast<uint8_t>(state), bl);
+}
+
+inline void decode(MigrationState &state, bufferlist::const_iterator& it) {
+  uint8_t int_state;
+  using ceph::decode;
+  decode(int_state, it);
+  state = static_cast<MigrationState>(int_state);
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MigrationState& migration_state);
+
+struct MigrationSpec {
+  MigrationHeaderType header_type = MIGRATION_HEADER_TYPE_SRC;
+  int64_t pool_id = -1;
+  std::string pool_namespace;
+  std::string image_name;
+  std::string image_id;
+  std::map<uint64_t, uint64_t> snap_seqs;
+  uint64_t overlap = 0;
+  bool flatten = false;
+  bool mirroring = false;
+  MirrorImageMode mirror_image_mode = MIRROR_IMAGE_MODE_JOURNAL;
+  MigrationState state = MIGRATION_STATE_ERROR;
+  std::string state_description;
+
+  MigrationSpec() {
+  }
+  MigrationSpec(MigrationHeaderType header_type, int64_t pool_id,
+                const std::string& pool_namespace,
+                const std::string &image_name, const std::string &image_id,
+                const std::map<uint64_t, uint64_t> &snap_seqs, uint64_t overlap,
+                bool mirroring, MirrorImageMode mirror_image_mode, bool flatten,
+                MigrationState state, const std::string &state_description)
+    : header_type(header_type), pool_id(pool_id),
+      pool_namespace(pool_namespace), image_name(image_name),
+      image_id(image_id), snap_seqs(snap_seqs), overlap(overlap),
+      flatten(flatten), mirroring(mirroring),
+      mirror_image_mode(mirror_image_mode), state(state),
+      state_description(state_description) {
+  }
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::const_iterator& it);
+  void dump(Formatter *f) const;
+
+  static void generate_test_instances(std::list<MigrationSpec*> &o);
+
+  inline bool operator==(const MigrationSpec& ms) const {
+    return header_type == ms.header_type && pool_id == ms.pool_id &&
+      pool_namespace == ms.pool_namespace && image_name == ms.image_name &&
+      image_id == ms.image_id && snap_seqs == ms.snap_seqs &&
+      overlap == ms.overlap && flatten == ms.flatten &&
+      mirroring == ms.mirroring && mirror_image_mode == ms.mirror_image_mode &&
+      state == ms.state && state_description == ms.state_description;
+  }
+};
+
+std::ostream& operator<<(std::ostream& os, const MigrationSpec& migration_spec);
+
+WRITE_CLASS_ENCODER(MigrationSpec);
+
+enum AssertSnapcSeqState {
+  ASSERT_SNAPC_SEQ_GT_SNAPSET_SEQ = 0,
+  ASSERT_SNAPC_SEQ_LE_SNAPSET_SEQ = 1,
+};
+
+inline void encode(const AssertSnapcSeqState &state, bufferlist& bl) {
+  using ceph::encode;
+  encode(static_cast<uint8_t>(state), bl);
+}
+
+inline void decode(AssertSnapcSeqState &state, bufferlist::const_iterator& it) {
+  uint8_t int_state;
+  using ceph::decode;
+  decode(int_state, it);
+  state = static_cast<AssertSnapcSeqState>(int_state);
+}
+
+std::ostream& operator<<(std::ostream& os, const AssertSnapcSeqState& state);
+
+void sanitize_entity_inst(entity_inst_t* entity_inst);
 
 } // namespace rbd
 } // namespace cls

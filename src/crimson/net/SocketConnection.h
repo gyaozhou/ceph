@@ -14,104 +14,40 @@
 
 #pragma once
 
-#include <core/reactor.hh>
+#include <seastar/core/sharded.hh>
 
 #include "msg/Policy.h"
-#include "Connection.h"
+#include "crimson/net/Connection.h"
+#include "crimson/net/Socket.h"
 #include "crimson/thread/Throttle.h"
 
-class AuthSessionHandler;
+namespace crimson::net {
 
-namespace ceph::net {
+class Dispatcher;
+class Protocol;
+class SocketMessenger;
+class SocketConnection;
+using SocketConnectionRef = seastar::shared_ptr<SocketConnection>;
 
 class SocketConnection : public Connection {
-  seastar::connected_socket socket;
-  seastar::input_stream<char> in;
-  seastar::output_stream<char> out;
+  SocketMessenger& messenger;
+  std::unique_ptr<Protocol> protocol;
 
-  state_t state = state_t::none;
-
-  /// buffer state for read()
-  struct Reader {
-    bufferlist buffer;
-    size_t remaining;
-  } r;
-
-  /// read the requested number of bytes into a bufferlist
-  seastar::future<bufferlist> read(size_t bytes);
-
-  /// state for handshake
-  struct Handshake {
-    ceph_msg_connect connect;
-    ceph_msg_connect_reply reply;
-    bool got_bad_auth = false;
-    std::unique_ptr<AuthAuthorizer> authorizer;
-    peer_type_t peer_type;
-    std::chrono::milliseconds backoff;
-    uint32_t connect_seq = 0;
-    uint32_t peer_global_seq = 0;
-    uint32_t global_seq;
-    seastar::promise<> promise;
-  } h;
-
-  /// server side of handshake negotiation
-  seastar::future<> handle_connect();
-  seastar::future<> handle_connect_with_existing(ConnectionRef existing,
-						 bufferlist&& authorizer_reply);
-  seastar::future<> replace_existing(ConnectionRef existing,
-				     bufferlist&& authorizer_reply,
-				     bool is_reset_from_peer = false);
-  seastar::future<> send_connect_reply(ceph::net::msgr_tag_t tag,
-				       bufferlist&& authorizer_reply = {});
-  seastar::future<> send_connect_reply_ready(ceph::net::msgr_tag_t tag,
-					     bufferlist&& authorizer_reply);
-
-  seastar::future<> handle_keepalive2();
-  seastar::future<> handle_keepalive2_ack();
-
-  bool require_auth_feature() const;
-  int get_peer_type() const {
-    return h.connect.host_type;
+  // if acceptor side, ephemeral_port is different from peer_addr.get_port();
+  // if connector side, ephemeral_port is different from my_addr.get_port().
+  enum class side_t {
+    none,
+    acceptor,
+    connector
+  };
+  side_t side = side_t::none;
+  uint16_t ephemeral_port = 0;
+  void set_ephemeral_port(uint16_t port, side_t _side) {
+    ephemeral_port = port;
+    side = _side;
   }
-  uint32_t get_proto_version(entity_type_t peer_type, bool connec) const;
-  /// client side of handshake negotiation
-  seastar::future<> connect(entity_type_t peer_type, entity_type_t host_type);
-  seastar::future<> handle_connect_reply(ceph::net::msgr_tag_t tag);
-  void reset_session();
 
-  /// state for an incoming message
-  struct MessageReader {
-    ceph_msg_header header;
-    ceph_msg_footer footer;
-    bufferlist front;
-    bufferlist middle;
-    bufferlist data;
-  } m;
-
-  /// satisfied when a CEPH_MSGR_TAG_MSG is read, indicating that a message
-  /// header will follow
-  seastar::promise<> on_message;
-
-  seastar::future<> maybe_throttle();
-  void read_tags_until_next_message();
-  seastar::future<seastar::stop_iteration> handle_ack();
-
-  /// becomes available when handshake completes, and when all previous messages
-  /// have been sent to the output stream. send() chains new messages as
-  /// continuations to this future to act as a queue
-  seastar::future<> send_ready;
-
-  /// encode/write a message
-  seastar::future<> write_message(MessageRef msg);
-
-  ceph::net::Policy<ceph::thread::Throttle> policy;
-  uint64_t features;
-  void set_features(uint64_t new_features) {
-    features = new_features;
-  }
-  bool has_feature(uint64_t feature) const {
-    return features & feature;
-  }
+  ceph::net::Policy<crimson::thread::Throttle> policy;
 
   /// the seq num of the last transmitted message
   seq_num_t out_seq = 0;
@@ -122,66 +58,60 @@ class SocketConnection : public Connection {
   ///          false otherwise.
   bool update_rx_seq(seq_num_t seq);
 
-  std::unique_ptr<AuthSessionHandler> session_security;
-
   // messages to be resent after connection gets reset
-  std::queue<MessageRef> out_q;
+  std::deque<MessageRef> out_q;
+  std::deque<MessageRef> pending_q;
   // messages sent, but not yet acked by peer
-  std::queue<MessageRef> sent;
-  static void discard_up_to(std::queue<MessageRef>*, seq_num_t);
-
-  struct Keepalive {
-    ceph_timespec reply_stamp;
-    ceph_timespec ack_stamp;
-  } k;
-
-  seastar::future<> fault();
+  std::deque<MessageRef> sent;
 
  public:
-  SocketConnection(Messenger *messenger,
-                   const entity_addr_t& my_addr,
-                   const entity_addr_t& peer_addr,
-                   seastar::connected_socket&& socket);
-  ~SocketConnection();
+  SocketConnection(SocketMessenger& messenger,
+                   Dispatcher& dispatcher,
+                   bool is_msgr2);
+  ~SocketConnection() override;
 
-  bool is_connected() override;
+  Messenger* get_messenger() const override;
 
-  seastar::future<> client_handshake(entity_type_t peer_type,
-				     entity_type_t host_type) override;
+  bool is_connected() const override;
 
-  seastar::future<> server_handshake() override;
+#ifdef UNIT_TESTS_BUILT
+  bool is_closed() const override;
 
-  seastar::future<MessageRef> read_message() override;
+  bool peer_wins() const override;
+#else
+  bool peer_wins() const;
+#endif
 
   seastar::future<> send(MessageRef msg) override;
 
+  seastar::future<> keepalive() override;
+
   seastar::future<> close() override;
 
-  uint32_t connect_seq() const override {
-    return h.connect_seq;
-  }
-  uint32_t peer_global_seq() const override {
-    return h.peer_global_seq;
-  }
-  seq_num_t rx_seq_num() const {
-    return in_seq;
-  }
-  state_t get_state() const override {
-    return state;
-  }
-  bool is_server_side() const override {
+  seastar::shard_id shard_id() const override;
+
+  void print(ostream& out) const override;
+
+  /// start a handshake from the client's perspective,
+  /// only call when SocketConnection first construct
+  void start_connect(const entity_addr_t& peer_addr,
+                     const entity_type_t& peer_type);
+  /// start a handshake from the server's perspective,
+  /// only call when SocketConnection first construct
+  void start_accept(SocketFRef&& socket,
+                    const entity_addr_t& peer_addr);
+
+  bool is_server_side() const {
     return policy.server;
   }
-  bool is_lossy() const override {
+
+  bool is_lossy() const {
     return policy.lossy;
   }
 
-private:
-  void requeue_sent() override;
-  std::tuple<seq_num_t, std::queue<MessageRef>> get_out_queue() override {
-    return {out_seq, std::move(out_q)};
-  }
-
+  friend class Protocol;
+  friend class ProtocolV1;
+  friend class ProtocolV2;
 };
 
-} // namespace ceph::net
+} // namespace crimson::net

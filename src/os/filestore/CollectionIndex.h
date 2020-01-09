@@ -74,7 +74,8 @@ protected:
   };
  public:
 
-  RWLock access_lock;
+  ceph::shared_mutex access_lock =
+    ceph::make_shared_mutex("CollectionIndex::access_lock", true, false);
   /// Type of returned paths
   typedef std::shared_ptr<Path> IndexedPath;
 
@@ -109,8 +110,8 @@ protected:
   /**
    * Cleanup before replaying journal
    *
-   * Index implemenations may need to perform compound operations
-   * which may leave the collection unstable if interupted.  cleanup
+   * Index implementations may need to perform compound operations
+   * which may leave the collection unstable if interrupted.  cleanup
    * is called on mount to allow the CollectionIndex implementation
    * to stabilize.
    *
@@ -162,6 +163,11 @@ protected:
     CollectionIndex* dest  //< [in] destination index
     ) { ceph_abort(); return 0; }
 
+  virtual int merge(
+    uint32_t bits,                              //< [in] common (target) bits
+    CollectionIndex* dest  //< [in] destination index
+    ) { ceph_abort(); return 0; }
+
 
   /// List contents of collection by hash
   virtual int collection_list_partial(
@@ -176,7 +182,7 @@ protected:
   virtual int prep_delete() { return 0; }
 
   CollectionIndex(CephContext* cct, const coll_t& collection)
-    : cct(cct), access_lock("CollectionIndex::access_lock", true, false) {}
+    : cct(cct) {}
 
   /*
    * Pre-hash the collection, this collection should map to a PG folder.

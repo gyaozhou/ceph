@@ -1,31 +1,60 @@
-@import '../../../../defaults';
+@import 'defaults';
 
-.login {
-  height: 100%;
+::ng-deep .login {
+  height: 100vh;
+  color: $color-login-row-text;
+  background-color: $color-login-row-bg;
+  margin: 0 -30px;
 
-  .row {
-    color: #ececec;
-    background-color: #474544;
+  header {
+    position: absolute;
+    width: 100vw;
+
+    .navbar {
+      padding: 1rem 2rem;
+
+      .dropdown-menu {
+        margin-top: 0.2rem;
+
+        li a {
+          &:hover {
+            background-color: $color-brand-teal;
+          }
+        }
+      }
+    }
   }
 
-  h1 {
-    margin-top: 0;
-    margin-bottom: 30px;
-  }
+  section {
+    display: inline-flex;
+    width: 100vw;
+    min-height: 100vh;
 
-  .btn-password,
-  .form-control {
-    color: #ececec;
-    background-color: #555555;
-  }
+    h1 {
+      margin: 0 0 30px 0;
+    }
 
-  .btn-password:focus {
-    outline-color: #66afe9;
-  }
+    .btn-password,
+    .form-control {
+      color: $color-password-toggle-text;
+      background-color: $color-password-toggle-bg;
+    }
 
-  .checkbox-primary input[type="checkbox"]:checked + label::before,
-  .checkbox-primary input[type="radio"]:checked + label::before {
-    background-color: $oa-color-blue;
-    border-color: $oa-color-blue;
+    .btn-password:focus {
+      outline-color: $color-password-toggle-focus;
+    }
   }
+}
+
+// This will override the colors applied by chrome
+@keyframes autofill {
+  to {
+    color: $color-password-toggle-text;
+    background-color: $color-password-toggle-bg;
+  }
+}
+
+input:-webkit-autofill {
+  animation-name: autofill;
+  animation-fill-mode: both;
 }

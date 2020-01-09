@@ -1,41 +1,35 @@
 import { Injectable } from '@angular/core';
 
-import { Observable } from 'rxjs/Observable';
-import { Subscriber } from 'rxjs/Subscriber';
+import { Observable, Subscriber } from 'rxjs';
 
 import { NotificationType } from '../enum/notification-type.enum';
+import { CdNotificationConfig } from '../models/cd-notification';
 import { ExecutingTask } from '../models/executing-task';
 import { FinishedTask } from '../models/finished-task';
 import { NotificationService } from './notification.service';
-import { ServicesModule } from './services.module';
-import { TaskManagerMessageService } from './task-manager-message.service';
+import { SummaryService } from './summary.service';
 import { TaskManagerService } from './task-manager.service';
+import { TaskMessageService } from './task-message.service';
 
 @Injectable({
-  providedIn: ServicesModule
+  providedIn: 'root'
 })
 export class TaskWrapperService {
   constructor(
     private notificationService: NotificationService,
-    private taskManagerMessageService: TaskManagerMessageService,
+    private summaryService: SummaryService,
+    private taskMessageService: TaskMessageService,
     private taskManagerService: TaskManagerService
   ) {}
 
-  wrapTaskAroundCall({
-    task,
-    call,
-    tasks
-  }: {
-    task: FinishedTask;
-    call: Observable<any>;
-    tasks?: ExecutingTask[];
-  }) {
+  wrapTaskAroundCall({ task, call }: { task: FinishedTask; call: Observable<any> }) {
     return new Observable((observer: Subscriber<any>) => {
       call.subscribe(
         (resp) => {
           if (resp.status === 202) {
-            this._handleExecutingTasks(task, tasks);
+            this._handleExecutingTasks(task);
           } else {
+            this.summaryService.refresh();
             task.success = true;
             this.notificationService.notifyTask(task);
           }
@@ -43,8 +37,7 @@ export class TaskWrapperService {
         (resp) => {
           task.success = false;
           task.exception = resp.error;
-          this.notificationService.notifyTask(task);
-          observer.error();
+          observer.error(resp);
         },
         () => {
           observer.complete();
@@ -53,16 +46,17 @@ export class TaskWrapperService {
     });
   }
 
-  _handleExecutingTasks(task: FinishedTask, tasks?: ExecutingTask[]) {
-    this.notificationService.show(
+  _handleExecutingTasks(task: FinishedTask) {
+    const notification = new CdNotificationConfig(
       NotificationType.info,
-      this.taskManagerMessageService.getRunningMessage(task),
-      this.taskManagerMessageService.getDescription(task)
+      this.taskMessageService.getRunningTitle(task)
     );
+    notification.isFinishedTask = true;
+    this.notificationService.show(notification);
+
     const executingTask = new ExecutingTask(task.name, task.metadata);
-    if (tasks) {
-      tasks.push(executingTask);
-    }
+    this.summaryService.addRunningTask(executingTask);
+
     this.taskManagerService.subscribe(
       executingTask.name,
       executingTask.metadata,

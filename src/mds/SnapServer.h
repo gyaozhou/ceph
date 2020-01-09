@@ -18,6 +18,8 @@
 #include "MDSTableServer.h"
 #include "snap.h"
 
+#include "messages/MRemoveSnaps.h"
+
 class MDSRank;
 class MonClient;
 
@@ -83,13 +85,16 @@ protected:
   }
 
   // server bits
-  void _prepare(bufferlist &bl, uint64_t reqid, mds_rank_t bymds) override;
+  void _prepare(const bufferlist &bl, uint64_t reqid, mds_rank_t bymds, bufferlist &out) override;
   void _get_reply_buffer(version_t tid, bufferlist *pbl) const override;
-  void _commit(version_t tid, MMDSTableRequest *req=NULL) override;
+  void _commit(version_t tid, cref_t<MMDSTableRequest> req) override;
   void _rollback(version_t tid) override;
   void _server_update(bufferlist& bl) override;
   bool _notify_prep(version_t tid) override;
-  void handle_query(MMDSTableRequest *m) override;
+  void handle_query(const cref_t<MMDSTableRequest> &m) override;
+
+public:
+  void handle_remove_snaps(const cref_t<MRemoveSnaps> &m);
 
 public:
   SnapServer(MDSRank *m, MonClient *monc)
@@ -100,11 +105,12 @@ public:
 
   bool upgrade_format() {
     // upgraded from old filesystem
-    assert(last_snap > 0);
+    ceph_assert(is_active());
+    ceph_assert(last_snap > 0);
     bool upgraded = false;
     if (get_version() == 0) {
       // version 0 confuses snapclient code
-      reset_state();
+      reset();
       upgraded = true;
     }
     if (snaprealm_v2_since == CEPH_NOSNAP) {
@@ -123,7 +129,7 @@ public:
     else if (ino == MDS_INO_MDSDIR(rank))
       mdsdir_scrubbed = true;
     else
-      assert(0);
+      ceph_abort();
   }
   bool can_allow_multimds_snaps() const {
     return (root_scrubbed && mdsdir_scrubbed) ||
@@ -138,7 +144,10 @@ public:
   }
 
   void dump(Formatter *f) const;
-  static void generate_test_instances(list<SnapServer*>& ls);
+  static void generate_test_instances(std::list<SnapServer*>& ls);
+
+  bool force_update(snapid_t last, snapid_t v2_since,
+		    map<snapid_t, SnapInfo>& _snaps);
 };
 WRITE_CLASS_ENCODER(SnapServer)
 

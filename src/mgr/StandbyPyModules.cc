@@ -13,14 +13,16 @@
 
 #include "StandbyPyModules.h"
 
+#include "common/Finisher.h"
 #include "common/debug.h"
+#include "common/errno.h"
 
 #include "mgr/MgrContext.h"
 #include "mgr/Gil.h"
 
 
 #include <boost/python.hpp>
-#include "include/assert.h"  // boost clobbers this
+#include "include/ceph_assert.h"  // boost clobbers this
 
 // For ::config_prefix
 #include "PyModuleRegistry.h"
@@ -35,9 +37,11 @@ StandbyPyModules::StandbyPyModules(
     const MgrMap &mgr_map_,
     PyModuleConfig &module_config,
     LogChannelRef clog_,
-    MonClient &monc_)
+    MonClient &monc_,
+    Finisher &f)
     : state(module_config, monc_),
-      clog(clog_)
+      clog(clog_),
+      finisher(f)
 {
   state.set_mgr_map(mgr_map_);
 }
@@ -45,55 +49,56 @@ StandbyPyModules::StandbyPyModules(
 // FIXME: completely identical to ActivePyModules
 void StandbyPyModules::shutdown()
 {
-  Mutex::Locker locker(lock);
+  std::lock_guard locker(lock);
 
   // Signal modules to drop out of serve() and/or tear down resources
   for (auto &i : modules) {
     auto module = i.second.get();
     const auto& name = i.first;
     dout(10) << "waiting for module " << name << " to shutdown" << dendl;
-    lock.Unlock();
+    lock.unlock();
     module->shutdown();
-    lock.Lock();
+    lock.lock();
     dout(10) << "module " << name << " shutdown" << dendl;
   }
 
   // For modules implementing serve(), finish the threads where we
   // were running that.
   for (auto &i : modules) {
-    lock.Unlock();
+    lock.unlock();
     dout(10) << "joining thread for module " << i.first << dendl;
     i.second->thread.join();
     dout(10) << "joined thread for module " << i.first << dendl;
-    lock.Lock();
+    lock.lock();
   }
 
   modules.clear();
 }
 
-int StandbyPyModules::start_one(PyModuleRef py_module)
+void StandbyPyModules::start_one(PyModuleRef py_module)
 {
-  Mutex::Locker l(lock);
-  const std::string &module_name = py_module->get_name();
+  std::lock_guard l(lock);
+  const auto name = py_module->get_name();
 
-  assert(modules.count(module_name) == 0);
+  ceph_assert(modules.count(name) == 0);
 
-  modules[module_name].reset(new StandbyPyModule(
-      state,
-      py_module, clog));
+  modules[name].reset(new StandbyPyModule(state, py_module, clog));
+  auto standby_module = modules.at(name).get();
 
-  int r = modules[module_name]->load();
-  if (r != 0) {
-    modules.erase(module_name);
-    return r;
-  } else {
-    dout(4) << "Starting thread for " << module_name << dendl;
-    // Giving Thread the module's module_name member as its
-    // char* thread name: thread must not outlive module class lifetime.
-    modules[module_name]->thread.create(
-        modules[module_name]->get_name().c_str());
-    return 0;
-  }
+  // Send all python calls down a Finisher to avoid blocking
+  // C++ code, and avoid any potential lock cycles.
+  finisher.queue(new LambdaContext([this, standby_module, name](int) {
+    int r = standby_module->load();
+    if (r != 0) {
+      derr << "Failed to run module in standby mode ('" << name << "')"
+           << dendl;
+      std::lock_guard l(lock);
+      modules.erase(name);
+    } else {
+      dout(4) << "Starting thread for " << name << dendl;
+      standby_module->thread.create(standby_module->get_thread_name());
+    }
+  }));
 }
 
 int StandbyPyModule::load()
@@ -103,9 +108,9 @@ int StandbyPyModule::load()
   // We tell the module how we name it, so that it can be consistent
   // with us in logging etc.
   auto pThisPtr = PyCapsule_New(this, nullptr, nullptr);
-  assert(pThisPtr != nullptr);
-  auto pModuleName = PyString_FromString(get_name().c_str());
-  assert(pModuleName != nullptr);
+  ceph_assert(pThisPtr != nullptr);
+  auto pModuleName = PyUnicode_FromString(get_name().c_str());
+  ceph_assert(pModuleName != nullptr);
   auto pArgs = PyTuple_Pack(2, pModuleName, pThisPtr);
   Py_DECREF(pThisPtr);
   Py_DECREF(pModuleName);

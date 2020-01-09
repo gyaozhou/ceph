@@ -11,19 +11,17 @@ install, and configure the Ceph iSCSI gateway for basic operation.
 
 -  A running Ceph Luminous or later storage cluster
 
--  RHEL/CentOS 7.5; Linux kernel v4.16 or newer; or the `Ceph iSCSI client test kernel <https://shaman.ceph.com/repos/kernel/ceph-iscsi-test>`_
+-  Red Hat Enterprise Linux/CentOS 7.5 (or newer); Linux kernel v4.16 (or newer)
 
 -  The following packages must be installed from your Linux distribution's software repository:
 
    -  ``targetcli-2.1.fb47`` or newer package
 
-   -  ``python-rtslib-2.1.fb64`` or newer package
+   -  ``python-rtslib-2.1.fb68`` or newer package
 
-   -  ``tcmu-runner-1.3.0`` or newer package
+   -  ``tcmu-runner-1.4.0`` or newer package
 
-   -  ``ceph-iscsi-config-2.4`` or newer package
-
-   -  ``ceph-iscsi-cli-2.5`` or newer package
+   -  ``ceph-iscsi-3.2`` or newer package
 
      .. important::
         If previous versions of these packages exist, then they must
@@ -43,11 +41,16 @@ to the *Installing* section:
 
 #. If needed, open TCP ports 3260 and 5000 on the firewall.
 
+   .. note::
+      Access to port 5000 should be restricted to a trusted internal network or
+      only the individual hosts where ``gwcli`` is used or ``ceph-mgr`` daemons
+      are running.
+
 #. Create a new or use an existing RADOS Block Device (RBD).
 
 **Installing:**
 
-If you are using the upstream ceph-iscsi-cli package follow the
+If you are using the upstream ceph-iscsi package follow the
 `manual install instructions`_.
 
 .. _`manual install instructions`: ../iscsi-target-cli-manual-install
@@ -60,11 +63,11 @@ If you are using the upstream ceph-iscsi-cli package follow the
 For rpm based instructions execute the following commands:
 
 #. As ``root``, on all iSCSI gateway nodes, install the
-   ``ceph-iscsi-cli`` package:
+   ``ceph-iscsi`` package:
 
    ::
 
-       # yum install ceph-iscsi-cli
+       # yum install ceph-iscsi
 
 #. As ``root``, on all iSCSI gateway nodes, install the ``tcmu-runner``
    package:
@@ -200,9 +203,6 @@ to create a iSCSI target and export a RBD image as LUN 0.
        > /iscsi-target...-igw/gateways> cd /disks
        > /disks> create pool=rbd image=disk_1 size=90G
 
-   .. warning::
-       There can not be any periods (.) in the pool name or in the image name.
-
 #. Create a client with the initiator name iqn.1994-05.com.redhat:rh7-client:
 
    ::
@@ -215,7 +215,7 @@ to create a iSCSI target and export a RBD image as LUN 0.
 
    ::
 
-       > /iscsi-target...at:rh7-client>  auth chap=myiscsiusername/myiscsipassword
+       > /iscsi-target...at:rh7-client>  auth username=myiscsiusername password=myiscsipassword
 
    .. warning::
       CHAP must always be configured. Without CHAP, the target will
@@ -225,6 +225,6 @@ to create a iSCSI target and export a RBD image as LUN 0.
 
    ::
 
-       > /iscsi-target...at:rh7-client> disk add rbd.disk_1
+       > /iscsi-target...at:rh7-client> disk add rbd/disk_1
 
 The next step is to configure the iSCSI initiators.

@@ -4,13 +4,16 @@
 #ifndef CEPH_LIBRBD_EXCLUSIVE_LOCK_H
 #define CEPH_LIBRBD_EXCLUSIVE_LOCK_H
 
-#include "librbd/ManagedLock.h"
 #include "common/AsyncOpTracker.h"
+#include "librbd/ManagedLock.h"
+#include "librbd/exclusive_lock/Policy.h"
+#include "common/RefCountedObj.h"
 
 namespace librbd {
 
 template <typename ImageCtxT = ImageCtx>
-class ExclusiveLock : public ManagedLock<ImageCtxT> {
+class ExclusiveLock : public RefCountedObject,
+                      public ManagedLock<ImageCtxT> {
 public:
   static ExclusiveLock *create(ImageCtxT &image_ctx) {
     return new ExclusiveLock<ImageCtxT>(image_ctx);
@@ -18,7 +21,8 @@ public:
 
   ExclusiveLock(ImageCtxT &image_ctx);
 
-  bool accept_requests(int *ret_val = nullptr) const;
+  bool accept_request(exclusive_lock::OperationRequestType request_type,
+                      int *ret_val) const;
   bool accept_ops() const;
 
   void block_requests(int r);
@@ -29,7 +33,8 @@ public:
 
   void handle_peer_notification(int r);
 
-  Context *start_op();
+  int get_unlocked_op_error() const;
+  Context *start_op(int* ret_val);
 
 protected:
   void shutdown_handler(int r, Context *on_finish) override;
@@ -93,7 +98,7 @@ private:
 
   int m_acquire_lock_peer_ret_val = 0;
 
-  bool accept_ops(const Mutex &lock) const;
+  bool accept_ops(const ceph::mutex &lock) const;
 
   void handle_init_complete(uint64_t features);
   void handle_post_acquiring_lock(int r);

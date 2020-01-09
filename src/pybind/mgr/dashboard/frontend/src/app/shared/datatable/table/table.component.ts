@@ -1,5 +1,7 @@
 import {
   AfterContentChecked,
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   EventEmitter,
   Input,
@@ -21,62 +23,104 @@ import {
 import * as _ from 'lodash';
 import { Observable, timer as observableTimer } from 'rxjs';
 
+import { Icons } from '../../../shared/enum/icons.enum';
 import { CellTemplate } from '../../enum/cell-template.enum';
 import { CdTableColumn } from '../../models/cd-table-column';
+import { CdTableFetchDataContext } from '../../models/cd-table-fetch-data-context';
 import { CdTableSelection } from '../../models/cd-table-selection';
 import { CdUserConfig } from '../../models/cd-user-config';
 
 @Component({
   selector: 'cd-table',
   templateUrl: './table.component.html',
-  styleUrls: ['./table.component.scss']
+  styleUrls: ['./table.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class TableComponent implements AfterContentChecked, OnInit, OnChanges, OnDestroy {
-  @ViewChild(DatatableComponent) table: DatatableComponent;
-  @ViewChild('tableCellBoldTpl') tableCellBoldTpl: TemplateRef<any>;
-  @ViewChild('sparklineTpl') sparklineTpl: TemplateRef<any>;
-  @ViewChild('routerLinkTpl') routerLinkTpl: TemplateRef<any>;
-  @ViewChild('checkIconTpl') checkIconTpl: TemplateRef<any>;
-  @ViewChild('perSecondTpl') perSecondTpl: TemplateRef<any>;
-  @ViewChild('executingTpl') executingTpl: TemplateRef<any>;
+  @ViewChild(DatatableComponent, { static: true })
+  table: DatatableComponent;
+  @ViewChild('tableCellBoldTpl', { static: true })
+  tableCellBoldTpl: TemplateRef<any>;
+  @ViewChild('sparklineTpl', { static: true })
+  sparklineTpl: TemplateRef<any>;
+  @ViewChild('routerLinkTpl', { static: true })
+  routerLinkTpl: TemplateRef<any>;
+  @ViewChild('checkIconTpl', { static: true })
+  checkIconTpl: TemplateRef<any>;
+  @ViewChild('perSecondTpl', { static: true })
+  perSecondTpl: TemplateRef<any>;
+  @ViewChild('executingTpl', { static: true })
+  executingTpl: TemplateRef<any>;
+  @ViewChild('classAddingTpl', { static: true })
+  classAddingTpl: TemplateRef<any>;
+  @ViewChild('badgeTpl', { static: true })
+  badgeTpl: TemplateRef<any>;
 
   // This is the array with the items to be shown.
-  @Input() data: any[];
+  @Input()
+  data: any[];
   // Each item -> { prop: 'attribute name', name: 'display name' }
-  @Input() columns: CdTableColumn[];
+  @Input()
+  columns: CdTableColumn[];
   // Each item -> { prop: 'attribute name', dir: 'asc'||'desc'}
-  @Input() sorts?: SortPropDir[];
+  @Input()
+  sorts?: SortPropDir[];
   // Method used for setting column widths.
-  @Input() columnMode? = 'flex';
+  @Input()
+  columnMode? = 'flex';
+  // Display only actions in header (make sure to disable toolHeader) and use ".only-table-actions"
+  @Input()
+  onlyActionHeader? = false;
   // Display the tool header, including reload button, pagination and search fields?
-  @Input() toolHeader? = true;
+  @Input()
+  toolHeader? = true;
+  // Display search field inside tool header?
+  @Input()
+  searchField? = true;
   // Display the table header?
-  @Input() header? = true;
+  @Input()
+  header? = true;
   // Display the table footer?
-  @Input() footer? = true;
+  @Input()
+  footer? = true;
   // Page size to show. Set to 0 to show unlimited number of rows.
-  @Input() limit? = 10;
+  @Input()
+  limit? = 10;
 
   /**
    * Auto reload time in ms - per default every 5s
    * You can set it to 0, undefined or false to disable the auto reload feature in order to
    * trigger 'fetchData' if the reload button is clicked.
    */
-  @Input() autoReload: any = 5000;
+  @Input()
+  autoReload: any = 5000;
 
   // Which row property is unique for a row. If the identifier is not specified in any
   // column, then the property name of the first column is used. Defaults to 'id'.
-  @Input() identifier = 'id';
+  @Input()
+  identifier = 'id';
   // If 'true', then the specified identifier is used anyway, although it is not specified
   // in any column. Defaults to 'false'.
-  @Input() forceIdentifier = false;
+  @Input()
+  forceIdentifier = false;
   // Allows other components to specify which type of selection they want,
   // e.g. 'single' or 'multi'.
-  @Input() selectionType: string = undefined;
-  // If `true` selected item details will be updated on table refresh
-  @Input() updateSelectionOnRefresh = true;
+  @Input()
+  selectionType: string = undefined;
+  // By default selected item details will be updated on table refresh, if data has changed
+  @Input()
+  updateSelectionOnRefresh: 'always' | 'never' | 'onChange' = 'onChange';
 
-  @Input() autoSave = true;
+  @Input()
+  autoSave = true;
+
+  // Enable this in order to search through the JSON of any used object.
+  @Input()
+  searchableObjects = false;
+
+  // Only needed to set if the classAddingTpl is used
+  @Input()
+  customCss?: { [css: string]: number | string | ((any) => boolean) };
 
   /**
    * Should be a function to update the input data if undefined nothing will be triggered
@@ -87,7 +131,8 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
    * What happens:
    * The function is triggered through one table and all tables will update
    */
-  @Output() fetchData = new EventEmitter();
+  @Output()
+  fetchData = new EventEmitter();
 
   /**
    * This should be defined if you need access to the selection object.
@@ -97,7 +142,8 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
    *
    * @memberof TableComponent
    */
-  @Output() updateSelection = new EventEmitter();
+  @Output()
+  updateSelection = new EventEmitter();
 
   /**
    * Use this variable to access the selected row(s).
@@ -105,17 +151,19 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
   selection = new CdTableSelection();
 
   tableColumns: CdTableColumn[];
+  icons = Icons;
   cellTemplates: {
     [key: string]: TemplateRef<any>;
   } = {};
   search = '';
   rows = [];
   loadingIndicator = true;
+  loadingError = false;
   paginationClasses = {
-    pagerLeftArrow: 'i fa fa-angle-double-left',
-    pagerRightArrow: 'i fa fa-angle-double-right',
-    pagerPrevious: 'i fa fa-angle-left',
-    pagerNext: 'i fa fa-angle-right'
+    pagerLeftArrow: Icons.leftArrowDouble,
+    pagerRightArrow: Icons.rightArrowDouble,
+    pagerPrevious: Icons.leftArrow,
+    pagerNext: Icons.rightArrow
   };
   userConfig: CdUserConfig = {};
   tableName: string;
@@ -128,9 +176,22 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
   // table columns after the browser window has been resized.
   private currentWidth: number;
 
-  constructor(private ngZone: NgZone) {}
+  constructor(private ngZone: NgZone, private cdRef: ChangeDetectorRef) {}
+
+  static prepareSearch(search: string) {
+    search = search.toLowerCase().replace(/,/g, '');
+    if (search.match(/['"][^'"]+['"]/)) {
+      search = search.replace(/['"][^'"]+['"]/g, (match: string) => {
+        return match.replace(/(['"])([^'"]+)(['"])/g, '$2').replace(/ /g, '+');
+      });
+    }
+    return search.split(' ').filter((word) => word);
+  }
 
   ngOnInit() {
+    // ngx-datatable triggers calculations each time mouse enters a row,
+    // this will prevent that.
+    this.table.element.addEventListener('mouseenter', (e) => e.stopPropagation(), true);
     this._addTemplates();
     if (!this.sorts) {
       // Check whether the specified identifier exists.
@@ -158,6 +219,8 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
         c.resizeable = false;
       }
     });
+
+    this.initCheckboxColumn();
     this.filterHiddenColumns();
     // Load the data table content every N ms or at least once.
     // Force showing the loading indicator if there are subscribers to the fetchData
@@ -168,7 +231,7 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     }
     if (_.isInteger(this.autoReload) && this.autoReload > 0) {
       this.ngZone.runOutsideAngular(() => {
-        this.reloadSubscriber = observableTimer(0, this.autoReload).subscribe((x) => {
+        this.reloadSubscriber = observableTimer(0, this.autoReload).subscribe(() => {
           this.ngZone.run(() => {
             return this.reloadData();
           });
@@ -254,6 +317,24 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     }));
   }
 
+  /**
+   * Add a column containing a checkbox if selectionType is 'multiClick'.
+   */
+  initCheckboxColumn() {
+    if (this.selectionType === 'multiClick') {
+      this.columns.unshift({
+        prop: undefined,
+        resizeable: false,
+        sortable: false,
+        draggable: false,
+        checkboxable: true,
+        canAutoResize: false,
+        cellClass: 'cd-datatable-checkbox',
+        width: 30
+      });
+    }
+  }
+
   filterHiddenColumns() {
     this.tableColumns = this.columns.filter((c) => !c.isHidden);
   }
@@ -275,7 +356,14 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     // https://github.com/swimlane/ngx-datatable/issues/193#issuecomment-329144543
     if (this.table && this.table.element.clientWidth !== this.currentWidth) {
       this.currentWidth = this.table.element.clientWidth;
+      // Recalculate the sizes of the grid.
       this.table.recalculate();
+      // Mark the datatable as changed, Angular's change-detection will
+      // do the rest for us => the grid will be redrawn.
+      // Note, the ChangeDetectorRef variable is private, so we need to
+      // use this workaround to access it and make TypeScript happy.
+      const cdRef = _.get(this.table, 'cd');
+      cdRef.markForCheck();
     }
   }
 
@@ -286,9 +374,23 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     this.cellTemplates.routerLink = this.routerLinkTpl;
     this.cellTemplates.perSecond = this.perSecondTpl;
     this.cellTemplates.executing = this.executingTpl;
+    this.cellTemplates.classAdding = this.classAddingTpl;
+    this.cellTemplates.badge = this.badgeTpl;
   }
 
-  ngOnChanges(changes) {
+  useCustomClass(value: any): string {
+    if (!this.customCss) {
+      throw new Error('Custom classes are not set!');
+    }
+    const classes = Object.keys(this.customCss);
+    const css = Object.values(this.customCss)
+      .map((v, i) => ((_.isFunction(v) && v(value)) || v === value) && classes[i])
+      .filter((x) => x)
+      .join(' ');
+    return _.isEmpty(css) ? undefined : css;
+  }
+
+  ngOnChanges() {
     this.useData();
   }
 
@@ -301,7 +403,19 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
 
   reloadData() {
     if (!this.updating) {
-      this.fetchData.emit();
+      this.loadingError = false;
+      const context = new CdTableFetchDataContext(() => {
+        // Do we have to display the error panel?
+        this.loadingError = context.errorConfig.displayError;
+        // Force data table to show no data?
+        if (context.errorConfig.resetData) {
+          this.data = [];
+        }
+        // Stop the loading indicator and reset the data table
+        // to the correct state.
+        this.useData();
+      });
+      this.fetchData.emit(context);
       this.updating = true;
     }
   }
@@ -325,15 +439,23 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     if (!this.data) {
       return; // Wait for data
     }
-    this.rows = [...this.data];
     if (this.search.length > 0) {
-      this.updateFilter(true);
+      this.updateFilter();
+    } else {
+      this.rows = [...this.data];
     }
+    this.reset();
+    this.updateSelected();
+  }
+
+  /**
+   * Reset the data table to correct state. This includes:
+   * - Disable loading indicator
+   * - Reset 'Updating' flag
+   */
+  reset() {
     this.loadingIndicator = false;
     this.updating = false;
-    if (this.updateSelectionOnRefresh) {
-      this.updateSelected();
-    }
   }
 
   /**
@@ -342,6 +464,9 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
    * or some selected items may have been removed.
    */
   updateSelected() {
+    if (this.updateSelectionOnRefresh === 'never') {
+      return;
+    }
     const newSelected = [];
     this.selection.selected.forEach((selectedItem) => {
       for (const row of this.data) {
@@ -350,12 +475,18 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
         }
       }
     });
+    if (
+      this.updateSelectionOnRefresh === 'onChange' &&
+      _.isEqual(this.selection.selected, newSelected)
+    ) {
+      return;
+    }
     this.selection.selected = newSelected;
-    this.onSelect();
+    this.onSelect(this.selection);
   }
 
-  onSelect() {
-    this.selection.update();
+  onSelect($event) {
+    this.selection.selected = $event['selected'];
     this.updateSelection.emit(_.clone(this.selection));
   }
 
@@ -376,9 +507,9 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     const sortProp = this.userConfig.sorts[0].prop;
     if (!_.find(this.tableColumns, (c: CdTableColumn) => c.prop === sortProp)) {
       this.userConfig.sorts = this.createSortingDefinition(this.tableColumns[0].prop);
-      this.table.onColumnSort({ sorts: this.userConfig.sorts });
     }
     this.table.recalculate();
+    this.cdRef.detectChanges();
   }
 
   createSortingDefinition(prop: TableColumnProp): SortPropDir[] {
@@ -394,19 +525,13 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     this.userConfig.sorts = sorts;
   }
 
-  updateFilter(event?: any) {
-    if (!event) {
+  updateFilter(clearSearch = false) {
+    if (clearSearch) {
       this.search = '';
     }
-    let search = this.search.toLowerCase().replace(/,/g, '');
     const columns = this.columns.filter((c) => c.cellTransformation !== CellTemplate.sparkline);
-    if (search.match(/['"][^'"]+['"]/)) {
-      search = search.replace(/['"][^'"]+['"]/g, (match: string) => {
-        return match.replace(/(['"])([^'"]+)(['"])/g, '$2').replace(/ /g, '+');
-      });
-    }
     // update the rows
-    this.rows = this.subSearch(this.data, search.split(' ').filter((s) => s.length > 0), columns);
+    this.rows = this.subSearch(this.data, TableComponent.prepareSearch(this.search), columns);
     // Whenever the filter changes, always go back to the first page
     this.table.offset = 0;
   }
@@ -417,43 +542,47 @@ export class TableComponent implements AfterContentChecked, OnInit, OnChanges, O
     }
     const searchTerms: string[] = currentSearch
       .pop()
-      .replace('+', ' ')
+      .replace(/\+/g, ' ')
       .split(':');
     const columnsClone = [...columns];
-    const dataClone = [...data];
-    const filterColumns = (columnName: string) =>
-      columnsClone.filter((c) => c.name.toLowerCase().indexOf(columnName) !== -1);
     if (searchTerms.length === 2) {
-      columns = filterColumns(searchTerms[0]);
+      columns = columnsClone.filter((c) => c.name.toLowerCase().indexOf(searchTerms[0]) !== -1);
     }
-    const searchTerm: string = _.last(searchTerms);
-    data = this.basicDataSearch(searchTerm, data, columns);
+    data = this.basicDataSearch(_.last(searchTerms), data, columns);
     // Checks if user searches for column but he is still typing
-    if (data.length === 0 && searchTerms.length === 1 && filterColumns(searchTerm).length > 0) {
-      data = dataClone;
-    }
     return this.subSearch(data, currentSearch, columnsClone);
   }
 
-  basicDataSearch(searchTerm: string, data: any[], columns: CdTableColumn[]) {
+  basicDataSearch(searchTerm: string, rows: any[], columns: CdTableColumn[]) {
     if (searchTerm.length === 0) {
-      return data;
+      return rows;
     }
-    return data.filter((d) => {
+    return rows.filter((row) => {
       return (
-        columns.filter((c) => {
-          let cellValue: any = _.get(d, c.prop);
-          if (!_.isUndefined(c.pipe)) {
-            cellValue = c.pipe.transform(cellValue);
+        columns.filter((col) => {
+          let cellValue: any = _.get(row, col.prop);
+
+          if (!_.isUndefined(col.pipe)) {
+            cellValue = col.pipe.transform(cellValue);
           }
-          if (_.isUndefined(cellValue)) {
-            return;
+          if (_.isUndefined(cellValue) || _.isNull(cellValue)) {
+            return false;
           }
+
           if (_.isArray(cellValue)) {
             cellValue = cellValue.join(' ');
           } else if (_.isNumber(cellValue) || _.isBoolean(cellValue)) {
             cellValue = cellValue.toString();
           }
+
+          if (_.isObjectLike(cellValue)) {
+            if (this.searchableObjects) {
+              cellValue = JSON.stringify(cellValue);
+            } else {
+              return false;
+            }
+          }
+
           return cellValue.toLowerCase().indexOf(searchTerm) !== -1;
         }).length > 0
       );

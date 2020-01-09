@@ -30,7 +30,7 @@ Code Documentation
 C and C++ can be documented with Doxygen_, using the subset of Doxygen
 markup supported by Breathe_.
 
-.. _Doxygen: http://www.stack.nl/~dimitri/doxygen/
+.. _Doxygen: http://www.doxygen.nl/
 .. _Breathe: https://github.com/michaeljones/breathe
 
 The general format for function documentation is::
@@ -63,7 +63,7 @@ Graphviz
 You can use Graphviz_, as explained in the `Graphviz extension documentation`_.
 
 .. _Graphviz: http://graphviz.org/
-.. _`Graphviz extension documentation`: http://sphinx.pocoo.org/ext/graphviz.html
+.. _`Graphviz extension documentation`: https://www.sphinx-doc.org/en/master/usage/extensions/graphviz.html
 
 .. graphviz::
 
@@ -129,4 +129,4 @@ SVG diagrams using Inkscape.
 
 HTML5 will support SVG inline.
 
-.. _Submitting Patches: /SubmittingPatches.rst
+.. _`Submitting Patches`: https://github.com/ceph/ceph/blob/master/SubmittingPatches.rst

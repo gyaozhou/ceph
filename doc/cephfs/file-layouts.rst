@@ -1,3 +1,4 @@
+.. _file-layouts:
 
 File layouts
 ============
@@ -129,7 +130,7 @@ Clearing layouts
 ----------------
 
 If you wish to remove an explicit layout from a directory, to revert to
-inherting the layout of its ancestor, you can do so:
+inheriting the layout of its ancestor, you can do so:
 
 .. code-block:: bash
 

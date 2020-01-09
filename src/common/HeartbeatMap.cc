@@ -17,6 +17,7 @@
 #include "HeartbeatMap.h"
 #include "ceph_context.h"
 #include "common/errno.h"
+#include "common/valgrind.h"
 #include "debug.h"
 
 #define dout_subsys ceph_subsys_heartbeatmap
@@ -27,7 +28,6 @@ namespace ceph {
 
 HeartbeatMap::HeartbeatMap(CephContext *cct)
   : m_cct(cct),
-    m_rwlock("HeartbeatMap::m_rwlock"),
     m_unhealthy_workers(0),
     m_total_workers(0)
 {
@@ -35,12 +35,12 @@ HeartbeatMap::HeartbeatMap(CephContext *cct)
 
 HeartbeatMap::~HeartbeatMap()
 {
-  assert(m_workers.empty());
+  ceph_assert(m_workers.empty());
 }
 
 heartbeat_handle_d *HeartbeatMap::add_worker(const string& name, pthread_t thread_id)
 {
-  m_rwlock.get_write();
+  std::unique_lock locker{m_rwlock};
   ldout(m_cct, 10) << "add_worker '" << name << "'" << dendl;
   heartbeat_handle_d *h = new heartbeat_handle_d(name);
   ANNOTATE_BENIGN_RACE_SIZED(&h->timeout, sizeof(h->timeout),
@@ -50,16 +50,14 @@ heartbeat_handle_d *HeartbeatMap::add_worker(const string& name, pthread_t threa
   m_workers.push_front(h);
   h->list_item = m_workers.begin();
   h->thread_id = thread_id;
-  m_rwlock.put_write();
   return h;
 }
 
 void HeartbeatMap::remove_worker(const heartbeat_handle_d *h)
 {
-  m_rwlock.get_write();
+  std::unique_lock locker{m_rwlock};
   ldout(m_cct, 10) << "remove_worker '" << h->name << "'" << dendl;
   m_workers.erase(h->list_item);
-  m_rwlock.put_write();
   delete h;
 }
 
@@ -79,7 +77,7 @@ bool HeartbeatMap::_check(const heartbeat_handle_d *h, const char *who,
 		    << " had suicide timed out after " << h->suicide_grace << dendl;
     pthread_kill(h->thread_id, SIGABRT);
     sleep(1);
-    assert(0 == "hit suicide timeout");
+    ceph_abort_msg("hit suicide timeout");
   }
   return healthy;
 }
@@ -118,12 +116,12 @@ bool HeartbeatMap::is_healthy()
 {
   int unhealthy = 0;
   int total = 0;
-  m_rwlock.get_read();
+  m_rwlock.lock_shared();
   auto now = ceph::coarse_mono_clock::now();
   if (m_cct->_conf->heartbeat_inject_failure) {
     ldout(m_cct, 0) << "is_healthy injecting failure for next " << m_cct->_conf->heartbeat_inject_failure << " seconds" << dendl;
     m_inject_unhealthy_until = now + std::chrono::seconds(m_cct->_conf->heartbeat_inject_failure);
-    m_cct->_conf->set_val("heartbeat_inject_failure", "0");
+    m_cct->_conf.set_val("heartbeat_inject_failure", "0");
   }
 
   bool healthy = true;
@@ -145,7 +143,7 @@ bool HeartbeatMap::is_healthy()
     }
     total++;
   }
-  m_rwlock.put_read();
+  m_rwlock.unlock_shared();
 
   m_unhealthy_workers = unhealthy;
   m_total_workers = total;
@@ -167,17 +165,15 @@ int HeartbeatMap::get_total_workers() const
 
 void HeartbeatMap::check_touch_file()
 {
-  if (is_healthy()) {
-    string path = m_cct->_conf->heartbeat_file;
-    if (path.length()) {
-      int fd = ::open(path.c_str(), O_WRONLY|O_CREAT, 0644);
-      if (fd >= 0) {
-	::utimes(path.c_str(), NULL);
-	::close(fd);
-      } else {
-	ldout(m_cct, 0) << "unable to touch " << path << ": "
-			<< cpp_strerror(errno) << dendl;
-      }
+  string path = m_cct->_conf->heartbeat_file;
+  if (path.length() && is_healthy()) {
+    int fd = ::open(path.c_str(), O_WRONLY|O_CREAT|O_CLOEXEC, 0644);
+    if (fd >= 0) {
+      ::utimes(path.c_str(), NULL);
+      ::close(fd);
+    } else {
+      ldout(m_cct, 0) << "unable to touch " << path << ": "
+                     << cpp_strerror(errno) << dendl;
     }
   }
 }

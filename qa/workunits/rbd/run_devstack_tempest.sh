@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -ex
 
-STACK_BRANCH=stable/pike
-TEMPEST_BRANCH=17.2.0
+STACK_BRANCH=stable/rocky
+TEMPEST_BRANCH=19.0.0
 
 STACK_USER=${STACK_USER:-stack}
 STACK_GROUP=${STACK_GROUP:-stack}
@@ -88,8 +88,8 @@ CINDER_ENABLED_BACKENDS=ceph:ceph
 TEMPEST_STORAGE_PROTOCOL=ceph
 REMOTE_CEPH=True
 
-enable_plugin devstack-plugin-mariadb git://github.com/openstack/devstack-plugin-mariadb
-enable_plugin devstack-plugin-ceph git://git.openstack.org/openstack/devstack-plugin-ceph
+enable_plugin devstack-plugin-mariadb https://github.com/openstack/devstack-plugin-mariadb
+enable_plugin devstack-plugin-ceph https://git.openstack.org/openstack/devstack-plugin-ceph
 EOF
 
 cat<<EOF > ${STACK_HOME_PATH}/start.sh

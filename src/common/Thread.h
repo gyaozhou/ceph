@@ -16,6 +16,8 @@
 #ifndef CEPH_THREAD_H
 #define CEPH_THREAD_H
 
+#include <functional>
+#include <string_view>
 #include <system_error>
 #include <thread>
 
@@ -24,11 +26,12 @@
 
 #include "include/compat.h"
 
+extern pid_t ceph_gettid();
+
 class Thread {
  private:
   pthread_t thread_id;
   pid_t pid;
-  int ioprio_class, ioprio_priority;
   int cpuid;
   const char *thread_name;
 
@@ -57,7 +60,6 @@ class Thread {
   void create(const char *name, size_t stacksize = 0);
   int join(void **prval = 0);
   int detach();
-  int set_ioprio(int cls, int prio);
   int set_affinity(int cpuid);
 };
 
@@ -68,13 +70,14 @@ std::string get_thread_name(const std::thread& t);
 void kill(std::thread& t, int signal);
 
 template<typename Fun, typename... Args>
-std::thread make_named_thread(const std::string& s,
+std::thread make_named_thread(std::string_view n,
 			      Fun&& fun,
 			      Args&& ...args) {
-  auto t = std::thread(std::forward<Fun>(fun),
-		       std::forward<Args>(args)...);
-  set_thread_name(t, s);
-  return t;
-}
 
+  return std::thread([n = std::string(n)](auto&& fun, auto&& ...args) {
+		       ceph_pthread_setname(pthread_self(), n.data());
+		       std::invoke(std::forward<Fun>(fun),
+				   std::forward<Args>(args)...);
+		     }, std::forward<Fun>(fun), std::forward<Args>(args)...);
+}
 #endif

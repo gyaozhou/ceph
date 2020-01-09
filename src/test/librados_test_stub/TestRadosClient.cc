@@ -4,7 +4,7 @@
 #include "test/librados_test_stub/TestRadosClient.h"
 #include "test/librados_test_stub/TestIoCtxImpl.h"
 #include "librados/AioCompletionImpl.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "common/ceph_json.h"
 #include "common/Finisher.h"
 #include <boost/bind.hpp>
@@ -12,6 +12,7 @@
 #include <errno.h>
 
 #include <atomic>
+#include <sstream>
 
 static int get_concurrency() {
   int concurrency = 0;
@@ -31,10 +32,10 @@ static int get_concurrency() {
 namespace librados {
 
 static void finish_aio_completion(AioCompletionImpl *c, int r) {
-  c->lock.Lock();
+  c->lock.lock();
   c->complete = true;
   c->rval = r;
-  c->lock.Unlock();
+  c->lock.unlock();
 
   rados_callback_t cb_complete = c->callback_complete;
   void *cb_complete_arg = c->callback_complete_arg;
@@ -48,10 +49,10 @@ static void finish_aio_completion(AioCompletionImpl *c, int r) {
     cb_safe(c, cb_safe_arg);
   }
 
-  c->lock.Lock();
+  c->lock.lock();
   c->callback_complete = NULL;
   c->callback_safe = NULL;
-  c->cond.Signal();
+  c->cond.notify_all();
   c->put_unlock();
 }
 
@@ -70,7 +71,7 @@ public:
     int ret = m_callback();
     if (m_comp != NULL) {
       if (m_finisher != NULL) {
-        m_finisher->queue(new FunctionContext(boost::bind(
+        m_finisher->queue(new LambdaContext(boost::bind(
           &finish_aio_completion, m_comp, ret)));
       } else {
         finish_aio_completion(m_comp, ret);
@@ -166,6 +167,25 @@ int TestRadosClient::mon_command(const std::vector<std::string>& cmd,
       return 0;
     } else if ((*j_it)->get_data() == "osd tier remove") {
       return 0;
+    } else if ((*j_it)->get_data() == "config-key rm") {
+      return 0;
+    } else if ((*j_it)->get_data() == "df") {
+      std::stringstream str;
+      str << R"({"pools": [)";
+
+      std::list<std::pair<int64_t, std::string>> pools;
+      pool_list(pools);
+      for (auto& pool : pools) {
+        if (pools.begin()->first != pool.first) {
+          str << ",";
+        }
+        str << R"({"name": ")" << pool.second << R"(", "stats": )"
+            << R"({"percent_used": 1.0, "bytes_used": 0, "max_avail": 0}})";
+      }
+
+      str << "]}";
+      outbl->append(str.str());
+      return 0;
     }
   }
   return -ENOSYS;
@@ -183,7 +203,7 @@ void TestRadosClient::add_aio_operation(const std::string& oid,
 struct WaitForFlush {
   int flushed() {
     if (--count == 0) {
-      aio_finisher->queue(new FunctionContext(boost::bind(
+      aio_finisher->queue(new LambdaContext(boost::bind(
         &finish_aio_completion, c, 0)));
       delete this;
     }
@@ -198,7 +218,7 @@ struct WaitForFlush {
 void TestRadosClient::flush_aio_operations() {
   AioCompletionImpl *comp = new AioCompletionImpl();
   flush_aio_operations(comp);
-  comp->wait_for_safe();
+  comp->wait_for_complete();
   comp->put();
 }
 
@@ -220,7 +240,7 @@ void TestRadosClient::flush_aio_operations(AioCompletionImpl *c) {
 
 int TestRadosClient::aio_watch_flush(AioCompletionImpl *c) {
   c->get();
-  Context *ctx = new FunctionContext(boost::bind(
+  Context *ctx = new LambdaContext(boost::bind(
     &TestRadosClient::finish_aio_completion, this, c, _1));
   get_watch_notify()->aio_flush(this, ctx);
   return 0;

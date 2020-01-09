@@ -38,7 +38,7 @@ struct GetMirrorImageIdRequest<librbd::MockTestImageCtx> {
                                          const std::string& global_image_id,
                                          std::string* image_id,
                                          Context* on_finish) {
-    assert(s_instance != nullptr);
+    ceph_assert(s_instance != nullptr);
     s_instance->image_id = image_id;
     s_instance->on_finish = on_finish;
     return s_instance;
@@ -136,7 +136,8 @@ TEST_F(TestMockImageReplayerPrepareLocalImageRequest, Success) {
   expect_get_mirror_image_id(mock_get_mirror_image_id_request, "local image id",
                              0);
   expect_dir_get_name(m_local_io_ctx, "local image name", 0);
-  expect_mirror_image_get(m_local_io_ctx, cls::rbd::MIRROR_IMAGE_STATE_ENABLED,
+  expect_mirror_image_get(m_local_io_ctx,
+                          cls::rbd::MIRROR_IMAGE_STATE_ENABLED,
                           "global image id", 0);
 
   librbd::MockJournal mock_journal;
@@ -236,7 +237,8 @@ TEST_F(TestMockImageReplayerPrepareLocalImageRequest, TagOwnerError) {
   expect_get_mirror_image_id(mock_get_mirror_image_id_request, "local image id",
                              0);
   expect_dir_get_name(m_local_io_ctx, "local image name", 0);
-  expect_mirror_image_get(m_local_io_ctx, cls::rbd::MIRROR_IMAGE_STATE_ENABLED,
+  expect_mirror_image_get(m_local_io_ctx,
+                          cls::rbd::MIRROR_IMAGE_STATE_ENABLED,
                           "global image id", 0);
 
   librbd::MockJournal mock_journal;

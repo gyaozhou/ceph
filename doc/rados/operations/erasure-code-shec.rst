@@ -56,7 +56,7 @@ Where:
 ``crush-root={root}``
 
 :Description: The name of the crush bucket used for the first step of
-              the CRUSH rule. For intance **step take default**.
+              the CRUSH rule. For instance **step take default**.
 
 :Type: String
 :Required: No.
@@ -141,4 +141,4 @@ Erasure code profile examples
              plugin=shec \
              k=8 m=4 c=3 \
              crush-failure-domain=host
-        $ ceph osd pool create shecpool 256 256 erasure SHECprofile
+        $ ceph osd pool create shecpool erasure SHECprofile

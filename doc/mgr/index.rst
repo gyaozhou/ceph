@@ -1,4 +1,4 @@
-
+.. _ceph-manager-daemon:
 
 ===================
 Ceph Manager Daemon
@@ -26,15 +26,24 @@ sensible.
     :maxdepth: 1
 
     Installation and Configuration <administrator>
-    Writing plugins <plugins>
-    Balancer plugin <balancer>
-    Dashboard plugin <dashboard>
-    Local pool plugin <localpool>
-    RESTful plugin <restful>
-    Zabbix plugin <zabbix>
-    Prometheus plugin <prometheus>
-    Influx plugin <influx>
-    Hello plugin <hello>
-    Telegraf plugin <telegraf>
-    Telemetry plugin <telemetry>
-    Iostat plugin <iostat>
+    Writing modules <modules>
+    Writing orchestrator plugins <orchestrator_modules>
+    Dashboard module <dashboard>
+    Alerts module <alerts>
+    DiskPrediction module <diskprediction>
+    Local pool module <localpool>
+    RESTful module <restful>
+    Zabbix module <zabbix>
+    Prometheus module <prometheus>
+    Influx module <influx>
+    Hello module <hello>
+    Telegraf module <telegraf>
+    Telemetry module <telemetry>
+    Iostat module <iostat>
+    Crash module <crash>
+    Insights module <insights>
+    Orchestrator CLI module <orchestrator_cli>
+    Cephadm orchestrator <cephadm>
+    Rook module <rook>
+    DeepSea module <deepsea>
+    Ansible module <ansible>

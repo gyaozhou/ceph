@@ -25,7 +25,7 @@
 
 /**
  *
- * TODO: normalize value based on some fucntion of half_life, 
+ * TODO: normalize value based on some function of half_life, 
  *  so that it can be interpreted as an approximation of a
  *  moving average of N seconds.  currently, changing half-life
  *  skews the scale of the value, even at steady state.  
@@ -43,7 +43,10 @@ public:
 
   void set_halflife(double hl) {
     k = log(.5) / hl;
-  }    
+  }
+  double get_halflife() const {
+    return log(.5) / k;
+  }
 
 private:
   double k = 0;             // k = ln(.5)/half_life

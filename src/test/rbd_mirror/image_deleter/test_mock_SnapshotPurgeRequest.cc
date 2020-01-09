@@ -24,7 +24,7 @@ struct MockTestImageCtx : public librbd::MockImageCtx {
                                   const std::string &image_id,
                                   const char *snap, librados::IoCtx& p,
                                   bool read_only) {
-    assert(s_instance != nullptr);
+    ceph_assert(s_instance != nullptr);
     return s_instance;
   }
 
@@ -139,12 +139,14 @@ public:
   }
 
   void expect_start_op(librbd::MockTestImageCtx &mock_image_ctx, bool success) {
-    EXPECT_CALL(*mock_image_ctx.exclusive_lock, start_op())
-      .WillOnce(Invoke([success]() {
+    EXPECT_CALL(*mock_image_ctx.exclusive_lock, start_op(_))
+      .WillOnce(Invoke([success](int* r) {
+                  auto f = [](int r) {};
                   if (!success) {
-                    return static_cast<FunctionContext*>(nullptr);
+                    *r = -EROFS;
+                    return static_cast<LambdaContext<decltype(f)>*>(nullptr);
                   }
-                  return new FunctionContext([](int r) {});
+                  return new LambdaContext(std::move(f));
                 }));
   }
 
@@ -157,7 +159,7 @@ public:
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, Success) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_PROTECTED, 0, {});
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap2", 2,
@@ -205,7 +207,7 @@ TEST_F(TestMockImageDeleterSnapshotPurgeRequest, Success) {
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, OpenError) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_UNPROTECTED, 0,
                                 {});
@@ -229,7 +231,7 @@ TEST_F(TestMockImageDeleterSnapshotPurgeRequest, OpenError) {
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, AcquireLockError) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_UNPROTECTED, 0,
                                 {});
@@ -255,7 +257,7 @@ TEST_F(TestMockImageDeleterSnapshotPurgeRequest, AcquireLockError) {
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, SnapUnprotectBusy) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_PROTECTED, 0, {});
   }
@@ -289,7 +291,7 @@ TEST_F(TestMockImageDeleterSnapshotPurgeRequest, SnapUnprotectBusy) {
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, SnapUnprotectError) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_PROTECTED, 0, {});
   }
@@ -323,7 +325,7 @@ TEST_F(TestMockImageDeleterSnapshotPurgeRequest, SnapUnprotectError) {
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, SnapRemoveError) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_UNPROTECTED, 0,
                                 {});
@@ -358,7 +360,7 @@ TEST_F(TestMockImageDeleterSnapshotPurgeRequest, SnapRemoveError) {
 
 TEST_F(TestMockImageDeleterSnapshotPurgeRequest, CloseError) {
   {
-    RWLock::WLocker snap_locker(m_local_image_ctx->snap_lock);
+    std::unique_lock image_locker{m_local_image_ctx->image_lock};
     m_local_image_ctx->add_snap(cls::rbd::UserSnapshotNamespace{}, "snap1", 1,
                                 0, {}, RBD_PROTECTION_STATUS_UNPROTECTED, 0,
                                 {});

@@ -1,9 +1,8 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
 
-#ifndef CEPH_RGW_REST_S3_H
+#pragma once
 
-#define CEPH_RGW_REST_S3_H
 #define TIME_BUF_SIZE 128
 
 #include <mutex>
@@ -23,10 +22,11 @@
 #include "rgw_ldap.h"
 
 #include "rgw_token.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 #include "rgw_auth.h"
 #include "rgw_auth_filters.h"
+#include "rgw_sts.h"
 
 struct rgw_http_error {
   int http_ret;
@@ -57,7 +57,6 @@ public:
 
 class RGWGetObjTags_ObjStore_S3 : public RGWGetObjTags_ObjStore
 {
-  bufferlist tags_bl;
 public:
   RGWGetObjTags_ObjStore_S3() {}
   ~RGWGetObjTags_ObjStore_S3() {}
@@ -82,6 +81,26 @@ public:
   void send_response() override;
 };
 
+class RGWGetBucketTags_ObjStore_S3 : public RGWGetBucketTags_ObjStore
+{
+  bufferlist tags_bl;
+public:
+  void send_response_data(bufferlist &bl) override;
+};
+
+class RGWPutBucketTags_ObjStore_S3 : public RGWPutBucketTags_ObjStore
+{
+public:
+  int get_params() override;
+  void send_response() override;
+};
+
+class RGWDeleteBucketTags_ObjStore_S3 : public RGWDeleteBucketTags
+{
+public:
+  void send_response() override;
+};
+
 class RGWListBuckets_ObjStore_S3 : public RGWListBuckets_ObjStore {
 public:
   RGWListBuckets_ObjStore_S3() {}
@@ -92,7 +111,7 @@ public:
     return 0;
   }
   void send_response_begin(bool has_buckets) override;
-  void send_response_data(RGWUserBuckets& buckets) override;
+  void send_response_data(rgw::sal::RGWBucketList& buckets) override;
   void send_response_end() override;
 };
 
@@ -106,12 +125,33 @@ public:
 };
 
 class RGWListBucket_ObjStore_S3 : public RGWListBucket_ObjStore {
+protected:
   bool objs_container;
-public:
+  bool encode_key {false};
+  int get_common_params();
+  void send_common_response();
+  void send_common_versioned_response();
+  public:
   RGWListBucket_ObjStore_S3() : objs_container(false) {
     default_max = 1000;
   }
   ~RGWListBucket_ObjStore_S3() override {}
+
+  int get_params() override;
+  void send_response() override;
+  void send_versioned_response();
+};
+
+class RGWListBucket_ObjStore_S3v2 : public RGWListBucket_ObjStore_S3 {
+  bool fetchOwner;
+  bool start_after_exist;
+  bool continuation_token_exist;
+  string startAfter;
+  string continuation_token;
+public:
+  RGWListBucket_ObjStore_S3v2() :  fetchOwner(false) {
+  }
+  ~RGWListBucket_ObjStore_S3v2() override {}
 
   int get_params() override;
   void send_response() override;
@@ -213,8 +253,8 @@ public:
   int get_data(bufferlist& bl) override;
   void send_response() override;
 
-  int get_encrypt_filter(std::unique_ptr<RGWPutObjDataProcessor>* filter,
-                         RGWPutObjDataProcessor* cb) override;
+  int get_encrypt_filter(std::unique_ptr<rgw::putobj::DataProcessor> *filter,
+                         rgw::putobj::DataProcessor *cb) override;
   int get_decrypt_filter(std::unique_ptr<RGWGetObj_Filter>* filter,
                          RGWGetObj_Filter* cb,
                          map<string, bufferlist>& attrs,
@@ -252,8 +292,8 @@ public:
 
   void send_response() override;
   int get_data(ceph::bufferlist& bl, bool& again) override;
-  int get_encrypt_filter(std::unique_ptr<RGWPutObjDataProcessor>* filter,
-                         RGWPutObjDataProcessor* cb) override;
+  int get_encrypt_filter(std::unique_ptr<rgw::putobj::DataProcessor> *filter,
+                         rgw::putobj::DataProcessor *cb) override;
 };
 
 class RGWDeleteObj_ObjStore_S3 : public RGWDeleteObj_ObjStore {
@@ -273,6 +313,7 @@ public:
 
   int init_dest_policy() override;
   int get_params() override;
+  int check_storage_class(const rgw_placement_rule& src_placement);
   void send_partial_response(off_t ofs) override;
   void send_response() override;
 };
@@ -290,14 +331,14 @@ public:
   RGWPutACLs_ObjStore_S3() {}
   ~RGWPutACLs_ObjStore_S3() override {}
 
-  int get_policy_from_state(RGWRados *store, struct req_state *s, stringstream& ss) override;
+  int get_policy_from_state(rgw::sal::RGWRadosStore *store, struct req_state *s, stringstream& ss) override;
   void send_response() override;
   int get_params() override;
 };
 
 class RGWGetLC_ObjStore_S3 : public RGWGetLC_ObjStore {
 protected:
-  RGWLifecycleConfiguration_S3  config;
+  RGWLifecycleConfiguration_S3 config;
 public:
   RGWGetLC_ObjStore_S3() {}
   ~RGWGetLC_ObjStore_S3() override {}
@@ -432,6 +473,49 @@ public:
   void end_response() override;
 };
 
+class RGWPutBucketObjectLock_ObjStore_S3 : public RGWPutBucketObjectLock_ObjStore {
+public:
+  RGWPutBucketObjectLock_ObjStore_S3() {}
+  ~RGWPutBucketObjectLock_ObjStore_S3() override {}
+  void send_response() override;
+};
+
+class RGWGetBucketObjectLock_ObjStore_S3 : public RGWGetBucketObjectLock_ObjStore {
+public:
+  RGWGetBucketObjectLock_ObjStore_S3() {}
+  ~RGWGetBucketObjectLock_ObjStore_S3() {}
+  void send_response() override;
+};
+
+class RGWPutObjRetention_ObjStore_S3 : public RGWPutObjRetention_ObjStore {
+public:
+  RGWPutObjRetention_ObjStore_S3() {}
+  ~RGWPutObjRetention_ObjStore_S3() {}
+  int get_params() override;
+  void send_response() override;
+};
+
+class RGWGetObjRetention_ObjStore_S3 : public RGWGetObjRetention_ObjStore {
+public:
+  RGWGetObjRetention_ObjStore_S3() {}
+  ~RGWGetObjRetention_ObjStore_S3() {}
+  void send_response() override;
+};
+
+class RGWPutObjLegalHold_ObjStore_S3 : public RGWPutObjLegalHold_ObjStore {
+public:
+  RGWPutObjLegalHold_ObjStore_S3() {}
+  ~RGWPutObjLegalHold_ObjStore_S3() {}
+  void send_response() override;
+};
+
+class RGWGetObjLegalHold_ObjStore_S3 : public RGWGetObjLegalHold_ObjStore {
+public:
+  RGWGetObjLegalHold_ObjStore_S3() {}
+  ~RGWGetObjLegalHold_ObjStore_S3() {}
+  void send_response() override;
+};
+
 class RGWGetObjLayout_ObjStore_S3 : public RGWGetObjLayout {
 public:
   RGWGetObjLayout_ObjStore_S3() {}
@@ -467,7 +551,8 @@ public:
 
 class RGW_Auth_S3 {
 public:
-  static int authorize(RGWRados *store,
+  static int authorize(const DoutPrefixProvider *dpp,
+                       rgw::sal::RGWRadosStore *store,
                        const rgw::auth::StrategyRegistry& auth_registry,
                        struct req_state *s);
 };
@@ -487,18 +572,18 @@ public:
   static int validate_bucket_name(const string& bucket);
   static int validate_object_name(const string& bucket);
 
-  int init(RGWRados *store,
+  int init(rgw::sal::RGWRadosStore *store,
            struct req_state *s,
            rgw::io::BasicClient *cio) override;
-  int authorize() override {
-    return RGW_Auth_S3::authorize(store, auth_registry, s);
+  int authorize(const DoutPrefixProvider *dpp) override {
+    return RGW_Auth_S3::authorize(dpp, store, auth_registry, s);
   }
   int postauth_init() override { return 0; }
 };
 
 class RGWHandler_REST_S3 : public RGWHandler_REST {
   friend class RGWRESTMgr_S3;
-
+protected:
   const rgw::auth::StrategyRegistry& auth_registry;
 public:
   static int init_from_header(struct req_state *s, int default_formatter, bool configurable_format);
@@ -506,52 +591,69 @@ public:
   explicit RGWHandler_REST_S3(const rgw::auth::StrategyRegistry& auth_registry)
     : RGWHandler_REST(),
       auth_registry(auth_registry) {
-  }
+    }
   ~RGWHandler_REST_S3() override = default;
 
-  int init(RGWRados *store,
+  int init(rgw::sal::RGWRadosStore *store,
            struct req_state *s,
            rgw::io::BasicClient *cio) override;
-  int authorize() override {
-    return RGW_Auth_S3::authorize(store, auth_registry, s);
-  }
+  int authorize(const DoutPrefixProvider *dpp) override;
   int postauth_init() override;
 };
 
 class RGWHandler_REST_Service_S3 : public RGWHandler_REST_S3 {
 protected:
-    bool is_usage_op() {
+  const bool isSTSEnabled;
+  const bool isIAMEnabled;
+  const bool isPSEnabled;
+  bool is_usage_op() const {
     return s->info.args.exists("usage");
   }
   RGWOp *op_get() override;
   RGWOp *op_head() override;
   RGWOp *op_post() override;
 public:
-  using RGWHandler_REST_S3::RGWHandler_REST_S3;
+   RGWHandler_REST_Service_S3(const rgw::auth::StrategyRegistry& auth_registry,
+                              bool _isSTSEnabled, bool _isIAMEnabled, bool _isPSEnabled) :
+      RGWHandler_REST_S3(auth_registry), isSTSEnabled(_isSTSEnabled), isIAMEnabled(_isIAMEnabled), isPSEnabled(_isPSEnabled) {}
   ~RGWHandler_REST_Service_S3() override = default;
 };
 
 class RGWHandler_REST_Bucket_S3 : public RGWHandler_REST_S3 {
+  const bool enable_pubsub;
 protected:
-  bool is_acl_op() {
+  bool is_acl_op() const {
     return s->info.args.exists("acl");
   }
-  bool is_cors_op() {
+  bool is_cors_op() const {
       return s->info.args.exists("cors");
   }
-  bool is_lc_op() {
+  bool is_lc_op() const {
       return s->info.args.exists("lifecycle");
   }
-  bool is_obj_update_op() override {
+  bool is_obj_update_op() const override {
     return is_acl_op() || is_cors_op();
   }
-  bool is_request_payment_op() {
+  bool is_tagging_op() const {
+    return s->info.args.exists("tagging");
+  }
+  bool is_request_payment_op() const {
     return s->info.args.exists("requestPayment");
   }
-  bool is_policy_op() {
+  bool is_policy_op() const {
     return s->info.args.exists("policy");
   }
-  RGWOp *get_obj_op(bool get_data);
+  bool is_object_lock_op() const {
+    return s->info.args.exists("object-lock");
+  }
+  bool is_notification_op() const {
+    if (enable_pubsub) {
+        return s->info.args.exists("notification");
+    }
+    return false;
+  }
+
+  RGWOp *get_obj_op(bool get_data) const;
 
   RGWOp *op_get() override;
   RGWOp *op_head() override;
@@ -560,20 +662,28 @@ protected:
   RGWOp *op_post() override;
   RGWOp *op_options() override;
 public:
-  using RGWHandler_REST_S3::RGWHandler_REST_S3;
+  RGWHandler_REST_Bucket_S3(const rgw::auth::StrategyRegistry& auth_registry, bool _enable_pubsub) :
+      RGWHandler_REST_S3(auth_registry), enable_pubsub(_enable_pubsub) {}
   ~RGWHandler_REST_Bucket_S3() override = default;
 };
 
 class RGWHandler_REST_Obj_S3 : public RGWHandler_REST_S3 {
 protected:
-  bool is_acl_op() {
+  bool is_acl_op() const {
     return s->info.args.exists("acl");
   }
-  bool is_tagging_op() {
+  bool is_tagging_op() const {
     return s->info.args.exists("tagging");
   }
-  bool is_obj_update_op() override {
-    return is_acl_op() || is_tagging_op() ;
+  bool is_obj_retention_op() const {
+    return s->info.args.exists("retention");
+  }
+  bool is_obj_legal_hold_op() const {
+    return s->info.args.exists("legal-hold");
+  }
+
+  bool is_obj_update_op() const override {
+    return is_acl_op() || is_tagging_op() || is_obj_retention_op() || is_obj_legal_hold_op();
   }
   RGWOp *get_obj_op(bool get_data);
 
@@ -590,10 +700,16 @@ public:
 
 class RGWRESTMgr_S3 : public RGWRESTMgr {
 private:
-  bool enable_s3website;
+  const bool enable_s3website;
+  const bool enable_sts;
+  const bool enable_iam;
+  const bool enable_pubsub;
 public:
-  explicit RGWRESTMgr_S3(bool enable_s3website = false)
-    : enable_s3website(enable_s3website) {
+  explicit RGWRESTMgr_S3(bool _enable_s3website=false, bool _enable_sts=false, bool _enable_iam=false, bool _enable_pubsub=false)
+    : enable_s3website(_enable_s3website),
+      enable_sts(_enable_sts),
+      enable_iam(_enable_iam),
+      enable_pubsub(_enable_pubsub) {
   }
 
   ~RGWRESTMgr_S3() override = default;
@@ -643,15 +759,17 @@ static inline int valid_s3_bucket_name(const string& name, bool relaxed=false)
   // This function enforces Amazon's spec for bucket names.
   // (The requirements, not the recommendations.)
   int len = name.size();
+  int max = (relaxed ? 255 : 63);
+
   if (len < 3) {
     // Name too short
     return -ERR_INVALID_BUCKET_NAME;
-  } else if (len > 255) {
+  } else if (len > max) {
     // Name too long
     return -ERR_INVALID_BUCKET_NAME;
   }
 
-  // bucket names must start with a number, letter, or underscore
+  // bucket names must start with a number or letter
   if (!(isalpha(name[0]) || isdigit(name[0]))) {
     if (!relaxed)
       return -ERR_INVALID_BUCKET_NAME;
@@ -659,14 +777,44 @@ static inline int valid_s3_bucket_name(const string& name, bool relaxed=false)
       return -ERR_INVALID_BUCKET_NAME;
   }
 
+  // bucket names must end with a number or letter
+  if (!(isalpha(name[len-1]) || isdigit(name[len-1])))
+    if (!relaxed)
+      return -ERR_INVALID_BUCKET_NAME;
+
   for (const char *s = name.c_str(); *s; ++s) {
     char c = *s;
-    if (isdigit(c) || (c == '.'))
+    if (isdigit(c))
       continue;
-    if (isalpha(c))
+
+    if (isalpha(c)) {
+      // name cannot contain uppercase letters
+      if (relaxed || islower(c))
+	continue;
+    }
+
+    if (c == '_')
+      // name cannot contain underscore
+      if (relaxed)
+	continue;
+
+    if (c == '-')
       continue;
-    if ((c == '-') || (c == '_'))
-      continue;
+
+    if (c == '.') {
+      if (!relaxed && s && *s) {
+	// name cannot have consecutive periods or dashes
+	// adjacent to periods
+	// ensure s is neither the first nor the last character
+	char p = *(s-1);
+	char n = *(s+1);
+	if ((p != '-') && (n != '.') && (n != '-'))
+	  continue;
+      } else {
+	continue;
+      }
+    }
+
     // Invalid character
     return -ERR_INVALID_BUCKET_NAME;
   }
@@ -678,9 +826,7 @@ static inline int valid_s3_bucket_name(const string& name, bool relaxed=false)
 }
 
 
-namespace rgw {
-namespace auth {
-namespace s3 {
+namespace rgw::auth::s3 {
 
 class AWSEngine : public rgw::auth::Engine {
 public:
@@ -699,6 +845,7 @@ public:
 
     using access_key_id_t = boost::string_view;
     using client_signature_t = boost::string_view;
+    using session_token_t = boost::string_view;
     using server_signature_t = basic_sstring<char, uint16_t, SIGNATURE_MAX_SIZE>;
     using string_to_sign_t = std::string;
 
@@ -720,6 +867,7 @@ public:
     struct auth_data_t {
       access_key_id_t access_key_id;
       client_signature_t client_signature;
+      session_token_t session_token;
       string_to_sign_t string_to_sign;
       signature_factory_t signature_factory;
       completer_factory_t completer_factory;
@@ -745,15 +893,17 @@ protected:
   /* TODO(rzarzynski): clean up. We've too many input parameter hee. Also
    * the signature get_auth_data() of VersionAbstractor is too complicated.
    * Replace these thing with a simple, dedicated structure. */
-  virtual result_t authenticate(const boost::string_view& access_key_id,
+  virtual result_t authenticate(const DoutPrefixProvider* dpp,
+                                const boost::string_view& access_key_id,
                                 const boost::string_view& signature,
+                                const boost::string_view& session_token,
                                 const string_to_sign_t& string_to_sign,
                                 const signature_factory_t& signature_factory,
                                 const completer_factory_t& completer_factory,
                                 const req_state* s) const = 0;
 
 public:
-  result_t authenticate(const req_state* const s) const final;
+  result_t authenticate(const DoutPrefixProvider* dpp, const req_state* const s) const final;
 };
 
 
@@ -814,25 +964,27 @@ class LDAPEngine : public AWSEngine {
   using result_t = rgw::auth::Engine::result_t;
 
 protected:
-  RGWRados* const store;
+  RGWCtl* const ctl;
   const rgw::auth::RemoteApplier::Factory* const apl_factory;
 
   acl_strategy_t get_acl_strategy() const;
   auth_info_t get_creds_info(const rgw::RGWToken& token) const noexcept;
 
-  result_t authenticate(const boost::string_view& access_key_id,
+  result_t authenticate(const DoutPrefixProvider* dpp,
+                        const boost::string_view& access_key_id,
                         const boost::string_view& signature,
+                        const boost::string_view& session_token,
                         const string_to_sign_t& string_to_sign,
                         const signature_factory_t&,
                         const completer_factory_t& completer_factory,
                         const req_state* s) const override;
 public:
   LDAPEngine(CephContext* const cct,
-             RGWRados* const store,
+             RGWCtl* const ctl,
              const VersionAbstractor& ver_abstractor,
              const rgw::auth::RemoteApplier::Factory* const apl_factory)
     : AWSEngine(cct, ver_abstractor),
-      store(store),
+      ctl(ctl),
       apl_factory(apl_factory) {
     init(cct);
   }
@@ -843,27 +995,29 @@ public:
     return "rgw::auth::s3::LDAPEngine";
   }
 
+  static bool valid();
   static void shutdown();
 };
 
-
 class LocalEngine : public AWSEngine {
-  RGWRados* const store;
+  RGWCtl* const ctl;
   const rgw::auth::LocalApplier::Factory* const apl_factory;
 
-  result_t authenticate(const boost::string_view& access_key_id,
+  result_t authenticate(const DoutPrefixProvider* dpp,
+                        const boost::string_view& access_key_id,
                         const boost::string_view& signature,
+                        const boost::string_view& session_token,
                         const string_to_sign_t& string_to_sign,
                         const signature_factory_t& signature_factory,
                         const completer_factory_t& completer_factory,
                         const req_state* s) const override;
 public:
   LocalEngine(CephContext* const cct,
-              RGWRados* const store,
+              RGWCtl* const ctl,
               const VersionAbstractor& ver_abstractor,
               const rgw::auth::LocalApplier::Factory* const apl_factory)
     : AWSEngine(cct, ver_abstractor),
-      store(store),
+      ctl(ctl),
       apl_factory(apl_factory) {
   }
 
@@ -874,6 +1028,49 @@ public:
   }
 };
 
+class STSEngine : public AWSEngine {
+  RGWCtl* const ctl;
+  const rgw::auth::LocalApplier::Factory* const local_apl_factory;
+  const rgw::auth::RemoteApplier::Factory* const remote_apl_factory;
+  const rgw::auth::RoleApplier::Factory* const role_apl_factory;
+
+  using acl_strategy_t = rgw::auth::RemoteApplier::acl_strategy_t;
+  using auth_info_t = rgw::auth::RemoteApplier::AuthInfo;
+
+  acl_strategy_t get_acl_strategy() const { return nullptr; };
+  auth_info_t get_creds_info(const STS::SessionToken& token) const noexcept;
+
+  int get_session_token(const DoutPrefixProvider* dpp, const boost::string_view& session_token,
+                        STS::SessionToken& token) const;
+
+  result_t authenticate(const DoutPrefixProvider* dpp, 
+                        const boost::string_view& access_key_id,
+                        const boost::string_view& signature,
+                        const boost::string_view& session_token,
+                        const string_to_sign_t& string_to_sign,
+                        const signature_factory_t& signature_factory,
+                        const completer_factory_t& completer_factory,
+                        const req_state* s) const override;
+public:
+  STSEngine(CephContext* const cct,
+              RGWCtl* const ctl,
+              const VersionAbstractor& ver_abstractor,
+              const rgw::auth::LocalApplier::Factory* const local_apl_factory,
+              const rgw::auth::RemoteApplier::Factory* const remote_apl_factory,
+              const rgw::auth::RoleApplier::Factory* const role_apl_factory)
+    : AWSEngine(cct, ver_abstractor),
+      ctl(ctl),
+      local_apl_factory(local_apl_factory),
+      remote_apl_factory(remote_apl_factory),
+      role_apl_factory(role_apl_factory) {
+  }
+
+  using AWSEngine::authenticate;
+
+  const char* get_name() const noexcept override {
+    return "rgw::auth::s3::STSEngine";
+  }
+};
 
 class S3AnonymousEngine : public rgw::auth::AnonymousEngine {
   bool is_applicable(const req_state* s) const noexcept override;
@@ -888,39 +1085,4 @@ public:
 };
 
 
-class S3AuthFactory : public rgw::auth::RemoteApplier::Factory,
-                      public rgw::auth::LocalApplier::Factory {
-  typedef rgw::auth::IdentityApplier::aplptr_t aplptr_t;
-  RGWRados* const store;
-
-public:
-  explicit S3AuthFactory(RGWRados* const store)
-    : store(store) {
-  }
-
-  aplptr_t create_apl_remote(CephContext* const cct,
-                             const req_state* const s,
-                             rgw::auth::RemoteApplier::acl_strategy_t&& acl_alg,
-                             const rgw::auth::RemoteApplier::AuthInfo &info
-                            ) const override {
-    return aplptr_t(
-      new rgw::auth::RemoteApplier(cct, store, std::move(acl_alg), info,
-                                   cct->_conf->rgw_keystone_implicit_tenants));
-  }
-
-  aplptr_t create_apl_local(CephContext* const cct,
-                            const req_state* const s,
-                            const RGWUserInfo& user_info,
-                            const std::string& subuser) const override {
-      return aplptr_t(
-        new rgw::auth::LocalApplier(cct, user_info, subuser));
-  }
-};
-
-
-} /* namespace s3 */
-} /* namespace auth */
-} /* namespace rgw */
-
-
-#endif /* CEPH_RGW_REST_S3_H */
+} // namespace rgw::auth::s3

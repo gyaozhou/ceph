@@ -3,9 +3,15 @@
 
 import time
 
-from .helper import ControllerTestCase
+try:
+    import mock
+except ImportError:
+    import unittest.mock as mock
+
+from . import ControllerTestCase
 from ..controllers import Controller, RESTController, Task
 from ..controllers.task import Task as TaskController
+from ..services import progress
 from ..tools import NotificationQueue, TaskManager
 
 
@@ -38,11 +44,19 @@ class TaskTest(RESTController):
     def bar(self, key, param=None):
         return {'my_param': param, 'key': key}
 
+    @Task('task/query', ['{param}'])
+    @RESTController.Collection('POST', query_params=['param'])
+    def query(self, param=None):
+        return {'my_param': param}
+
 
 class TaskControllerTest(ControllerTestCase):
     @classmethod
     def setup_server(cls):
         # pylint: disable=protected-access
+        progress.get_progress_tasks = mock.MagicMock()
+        progress.get_progress_tasks.return_value = ([], [])
+
         NotificationQueue.start_queue()
         TaskManager.init()
         TaskTest._cp_config['tools.authenticate.on'] = False
@@ -75,3 +89,7 @@ class TaskControllerTest(ControllerTestCase):
     def test_bar_task(self):
         self._task_put('/test/task/3/bar', {'param': 'hello'})
         self.assertJsonBody({'my_param': 'hello', 'key': '3'})
+
+    def test_query_param(self):
+        self._task_post('/test/task/query')
+        self.assertJsonBody({'my_param': None})

@@ -18,13 +18,11 @@
  *
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cerrno>
 #include <algorithm>
-using namespace std;
-
 #include "common/debug.h"
 #include "ErasureCodeShec.h"
 extern "C" {
@@ -39,6 +37,10 @@ extern int* reed_sol_vandermonde_coding_matrix(int k, int m, int w);
 #define dout_subsys ceph_subsys_osd
 #undef dout_prefix
 #define dout_prefix _prefix(_dout)
+
+using namespace std;
+using namespace ceph;
+
 
 static ostream& _prefix(std::ostream* _dout)
 {
@@ -62,7 +64,7 @@ unsigned int ErasureCodeShec::get_chunk_size(unsigned int object_size) const
   unsigned tail = object_size % alignment;
   unsigned padded_length = object_size + ( tail ?  ( alignment - tail ) : 0 );
 
-  assert(padded_length % k == 0);
+  ceph_assert(padded_length % k == 0);
   return padded_length / k;
 }
 
@@ -408,7 +410,7 @@ void ErasureCodeShecReedSolomonVandermonde::prepare()
   dout(10) << " [ technique ] = " <<
     ((technique == MULTIPLE) ? "multiple" : "single") << dendl;
 
-  assert((technique == SINGLE) || (technique == MULTIPLE));
+  ceph_assert((technique == SINGLE) || (technique == MULTIPLE));
 
 }
 

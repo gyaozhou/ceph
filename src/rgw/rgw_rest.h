@@ -1,8 +1,7 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
 
-#ifndef CEPH_RGW_REST_H
-#define CEPH_RGW_REST_H
+#pragma once
 
 #define TIME_BUF_SIZE 128
 
@@ -10,14 +9,14 @@
 #include <boost/container/flat_set.hpp>
 #include "common/sstring.hh"
 #include "common/ceph_json.h"
-#include "include/assert.h" /* needed because of common/ceph_json.h */
+#include "include/ceph_assert.h" /* needed because of common/ceph_json.h */
 #include "rgw_op.h"
 #include "rgw_formats.h"
 #include "rgw_client_io.h"
 
 extern std::map<std::string, std::string> rgw_to_http_attrs;
 
-extern void rgw_rest_init(CephContext *cct, RGWRados *store, RGWZoneGroup& zone_group);
+extern void rgw_rest_init(CephContext *cct, const RGWZoneGroup& zone_group);
 
 extern void rgw_flush_formatter_and_reset(struct req_state *s,
 					 ceph::Formatter *formatter);
@@ -25,24 +24,45 @@ extern void rgw_flush_formatter_and_reset(struct req_state *s,
 extern void rgw_flush_formatter(struct req_state *s,
 				ceph::Formatter *formatter);
 
-extern int rgw_rest_read_all_input(struct req_state *s, char **data, int *plen,
-				   uint64_t max_len, bool allow_chunked=true);
+std::tuple<int, bufferlist > rgw_rest_read_all_input(struct req_state *s,
+                                        const uint64_t max_len,
+                                        const bool allow_chunked=true);
+
+static inline boost::string_ref rgw_sanitized_hdrval(ceph::buffer::list& raw)
+{
+  /* std::string and thus boost::string_ref ARE OBLIGED to carry multiple
+   * 0x00 and count them to the length of a string. We need to take that
+   * into consideration and sanitize the size of a ceph::buffer::list used
+   * to store metadata values (x-amz-meta-*, X-Container-Meta-*, etags).
+   * Otherwise we might send 0x00 to clients. */
+  const char* const data = raw.c_str();
+  size_t len = raw.length();
+
+  if (len && data[len - 1] == '\0') {
+    /* That's the case - the null byte has been included at the last position
+     * of the bufferlist. We need to restore the proper string length we'll
+     * pass to string_ref. */
+    len--;
+  }
+
+  return boost::string_ref(data, len);
+}
 
 template <class T>
 int rgw_rest_get_json_input(CephContext *cct, req_state *s, T& out,
 			    uint64_t max_len, bool *empty)
 {
-  int rv, data_len;
-  char *data;
-
   if (empty)
     *empty = false;
 
-  if ((rv = rgw_rest_read_all_input(s, &data, &data_len, max_len)) < 0) {
+  int rv = 0;
+  bufferlist data;
+  std::tie(rv, data) = rgw_rest_read_all_input(s, max_len);
+  if (rv < 0) {
     return rv;
   }
 
-  if (!data_len) {
+  if (!data.length()) {
     if (empty) {
       *empty = true;
     }
@@ -52,12 +72,9 @@ int rgw_rest_get_json_input(CephContext *cct, req_state *s, T& out,
 
   JSONParser parser;
 
-  if (!parser.parse(data, data_len)) {
-    free(data);
+  if (!parser.parse(data.c_str(), data.length())) {
     return -EINVAL;
   }
-
-  free(data);
 
   try {
       decode_json_obj(out, &parser);
@@ -69,37 +86,32 @@ int rgw_rest_get_json_input(CephContext *cct, req_state *s, T& out,
 }
 
 template <class T>
-int rgw_rest_get_json_input_keep_data(CephContext *cct, req_state *s, T& out, uint64_t max_len, char **pdata, int *len)
+std::tuple<int, bufferlist > rgw_rest_get_json_input_keep_data(CephContext *cct, req_state *s, T& out, uint64_t max_len)
 {
-  int rv, data_len;
-  char *data;
-
-  if ((rv = rgw_rest_read_all_input(s, &data, &data_len, max_len)) < 0) {
-    return rv;
+  int rv = 0;
+  bufferlist data;
+  std::tie(rv, data) = rgw_rest_read_all_input(s, max_len);
+  if (rv < 0) {
+    return std::make_tuple(rv, std::move(data));
   }
 
-  if (!data_len) {
-    return -EINVAL;
+  if (!data.length()) {
+    return std::make_tuple(-EINVAL, std::move(data));
   }
-
-  *len = data_len;
 
   JSONParser parser;
 
-  if (!parser.parse(data, data_len)) {
-    free(data);
-    return -EINVAL;
+  if (!parser.parse(data.c_str(), data.length())) {
+    return std::make_tuple(-EINVAL, std::move(data));
   }
 
   try {
     decode_json_obj(out, &parser);
   } catch (JSONDecoder::err& e) {
-    free(data);
-    return -EINVAL;
+    return std::make_tuple(-EINVAL, std::move(data));
   }
 
-  *pdata = data;
-  return 0;
+  return std::make_tuple(0, std::move(data));
 }
 
 class RESTArgs {
@@ -150,7 +162,7 @@ protected:
 public:
   RGWGetObj_ObjStore() : sent_header(false) {}
 
-  void init(RGWRados *store, struct req_state *s, RGWHandler *h) override {
+  void init(rgw::sal::RGWRadosStore *store, struct req_state *s, RGWHandler *h) override {
     RGWGetObj::init(store, s, h);
     sent_header = false;
   }
@@ -168,6 +180,18 @@ class RGWPutObjTags_ObjStore: public RGWPutObjTags {
 public:
   RGWPutObjTags_ObjStore() {};
   ~RGWPutObjTags_ObjStore() {};
+};
+
+class RGWGetBucketTags_ObjStore : public RGWGetBucketTags {
+public:
+  RGWGetBucketTags_ObjStore() = default;
+  virtual ~RGWGetBucketTags_ObjStore() = default; 
+};
+
+class RGWPutBucketTags_ObjStore: public RGWPutBucketTags {
+public:
+  RGWPutBucketTags_ObjStore() = default;
+  virtual ~RGWPutBucketTags_ObjStore() = default; 
 };
 
 class RGWListBuckets_ObjStore : public RGWListBuckets {
@@ -460,13 +484,51 @@ public:
     ~RGWInfo_ObjStore() override = default;
 };
 
+class RGWPutBucketObjectLock_ObjStore : public RGWPutBucketObjectLock {
+public:
+  RGWPutBucketObjectLock_ObjStore() = default;
+  ~RGWPutBucketObjectLock_ObjStore() = default;
+  int get_params() override;
+};
+
+class RGWGetBucketObjectLock_ObjStore : public RGWGetBucketObjectLock {
+public:
+  RGWGetBucketObjectLock_ObjStore() = default;
+  ~RGWGetBucketObjectLock_ObjStore() override = default;
+};
+
+class RGWPutObjRetention_ObjStore : public RGWPutObjRetention {
+public:
+  RGWPutObjRetention_ObjStore() = default;
+  ~RGWPutObjRetention_ObjStore() override = default;
+};
+
+class RGWGetObjRetention_ObjStore : public RGWGetObjRetention {
+public:
+  RGWGetObjRetention_ObjStore() = default;
+  ~RGWGetObjRetention_ObjStore() = default;
+};
+
+class RGWPutObjLegalHold_ObjStore : public RGWPutObjLegalHold {
+public:
+  RGWPutObjLegalHold_ObjStore() = default;
+  ~RGWPutObjLegalHold_ObjStore() override = default;
+  int get_params() override;
+};
+
+class RGWGetObjLegalHold_ObjStore : public RGWGetObjLegalHold {
+public:
+  RGWGetObjLegalHold_ObjStore() = default;
+  ~RGWGetObjLegalHold_ObjStore() = default;
+};
+
 class RGWRESTOp : public RGWOp {
 protected:
   int http_ret;
   RGWRESTFlusher flusher;
 public:
   RGWRESTOp() : http_ret(0) {}
-  void init(RGWRados *store, struct req_state *s,
+  void init(rgw::sal::RGWRadosStore *store, struct req_state *s,
             RGWHandler *dialect_handler) override {
     RGWOp::init(store, s, dialect_handler);
     flusher.init(s, this);
@@ -475,12 +537,13 @@ public:
   virtual int check_caps(RGWUserCaps& caps)
     { return -EPERM; } /* should to be implemented! */
   int verify_permission() override;
+  dmc::client_id dmclock_client() override { return dmc::client_id::admin; }
 };
 
 class RGWHandler_REST : public RGWHandler {
 protected:
 
-  virtual bool is_obj_update_op() { return false; }
+  virtual bool is_obj_update_op() const { return false; }
   virtual RGWOp *op_get() { return NULL; }
   virtual RGWOp *op_put() { return NULL; }
   virtual RGWOp *op_delete() { return NULL; }
@@ -489,9 +552,10 @@ protected:
   virtual RGWOp *op_copy() { return NULL; }
   virtual RGWOp *op_options() { return NULL; }
 
+public:
   static int allocate_formatter(struct req_state *s, int default_formatter,
 				bool configurable);
-public:
+
   static constexpr int MAX_BUCKET_NAME_LEN = 255;
   static constexpr int MAX_OBJ_NAME_LEN = 1024;
 
@@ -500,11 +564,12 @@ public:
 
   static int validate_bucket_name(const string& bucket);
   static int validate_object_name(const string& object);
+  static int reallocate_formatter(struct req_state *s, int type);
 
   int init_permissions(RGWOp* op) override;
   int read_permissions(RGWOp* op) override;
 
-  virtual RGWOp* get_op(RGWRados* store);
+  virtual RGWOp* get_op(rgw::sal::RGWRadosStore* store);
   virtual void put_op(RGWOp* op);
 };
 
@@ -512,12 +577,10 @@ class RGWHandler_REST_SWIFT;
 class RGWHandler_SWIFT_Auth;
 class RGWHandler_REST_S3;
 
-namespace rgw {
-namespace auth {
+namespace rgw::auth {
 
 class StrategyRegistry;
 
-}
 }
 
 class RGWRESTMgr {
@@ -589,7 +652,7 @@ class RGWREST {
   static int preprocess(struct req_state *s, rgw::io::BasicClient* rio);
 public:
   RGWREST() {}
-  RGWHandler_REST *get_handler(RGWRados *store,
+  RGWHandler_REST *get_handler(rgw::sal::RGWRadosStore *store,
                                struct req_state *s,
                                const rgw::auth::StrategyRegistry& auth_registry,
                                const std::string& frontend_prefix,
@@ -716,7 +779,7 @@ static inline void dump_header_if_nonempty(struct req_state* s,
 static inline std::string compute_domain_uri(const struct req_state *s) {
   std::string uri = (!s->info.domain.empty()) ? s->info.domain :
     [&s]() -> std::string {
-    auto env = *(s->info.env);
+    RGWEnv const &env(*(s->info.env));
     std::string uri =
     env.get("SERVER_PORT_SECURE") ? "https://" : "http://";
     if (env.exists("SERVER_NAME")) {
@@ -758,5 +821,3 @@ extern int dump_body(struct req_state* s, const char* buf, size_t len);
 extern int dump_body(struct req_state* s, /* const */ ceph::buffer::list& bl);
 extern int dump_body(struct req_state* s, const std::string& str);
 extern int recv_body(struct req_state* s, char* buf, size_t max);
-
-#endif /* CEPH_RGW_REST_H */

@@ -1,11 +1,12 @@
 import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { FormsModule } from '@angular/forms';
 import { RouterTestingModule } from '@angular/router/testing';
 
-import { AuthService } from '../../../shared/api/auth.service';
-import { AuthStorageService } from '../../../shared/services/auth-storage.service';
-import { configureTestBed } from '../../../shared/unit-test-helper';
+import { ToastrModule } from 'ngx-toastr';
+
+import { configureTestBed, i18nProviders } from '../../../../testing/unit-test-helper';
+import { NotificationService } from '../../../shared/services/notification.service';
+import { AuthModule } from '../auth.module';
 import { LoginComponent } from './login.component';
 
 describe('LoginComponent', () => {
@@ -13,9 +14,8 @@ describe('LoginComponent', () => {
   let fixture: ComponentFixture<LoginComponent>;
 
   configureTestBed({
-    imports: [FormsModule, RouterTestingModule, HttpClientTestingModule],
-    declarations: [LoginComponent],
-    providers: [AuthService, AuthStorageService]
+    imports: [RouterTestingModule, HttpClientTestingModule, AuthModule, ToastrModule.forRoot()],
+    providers: [i18nProviders]
   });
 
   beforeEach(() => {
@@ -26,5 +26,20 @@ describe('LoginComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  it('should ensure no modal dialogs are opened', () => {
+    component['bsModalService']['modalsCount'] = 2;
+    component.ngOnInit();
+    expect(component['bsModalService'].getModalsCount()).toBe(0);
+  });
+
+  it('should call toggleSidebar if not logged in', () => {
+    const notificationService: NotificationService = TestBed.get(NotificationService);
+    spyOn(notificationService, 'toggleSidebar').and.callThrough();
+
+    component.ngOnInit();
+
+    expect(notificationService.toggleSidebar).toHaveBeenCalledWith(true);
   });
 });

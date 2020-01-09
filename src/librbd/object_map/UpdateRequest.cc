@@ -33,8 +33,8 @@ void UpdateRequest<I>::send() {
 
 template <typename I>
 void UpdateRequest<I>::update_object_map() {
-  assert(m_image_ctx.snap_lock.is_locked());
-  assert(m_image_ctx.object_map_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_image_ctx.image_lock));
+  ceph_assert(ceph_mutex_is_locked(*m_object_map_lock));
   CephContext *cct = m_image_ctx.cct;
 
   // break very large requests into manageable batches
@@ -64,7 +64,7 @@ void UpdateRequest<I>::update_object_map() {
   int r = m_image_ctx.md_ctx.aio_operate(
     oid, rados_completion, &op, 0, snaps,
     (m_trace.valid() ? m_trace.get_info() : nullptr));
-  assert(r == 0);
+  ceph_assert(r == 0);
   rados_completion->release();
 }
 
@@ -72,9 +72,16 @@ template <typename I>
 void UpdateRequest<I>::handle_update_object_map(int r) {
   ldout(m_image_ctx.cct, 20) << "r=" << r << dendl;
 
+  if (r == -ENOENT && m_ignore_enoent) {
+    r = 0;
+  }
+  if (r < 0 && m_ret_val == 0) {
+    m_ret_val = r;
+  }
+
   {
-    RWLock::RLocker snap_locker(m_image_ctx.snap_lock);
-    RWLock::WLocker object_map_locker(m_image_ctx.object_map_lock);
+    std::shared_lock image_locker{m_image_ctx.image_lock};
+    std::unique_lock object_map_locker{*m_object_map_lock};
     update_in_memory_object_map();
 
     if (m_update_end_object_no < m_end_object_no) {
@@ -85,13 +92,13 @@ void UpdateRequest<I>::handle_update_object_map(int r) {
   }
 
   // no more batch updates to send
-  complete(r);
+  complete(m_ret_val);
 }
 
 template <typename I>
 void UpdateRequest<I>::update_in_memory_object_map() {
-  assert(m_image_ctx.snap_lock.is_locked());
-  assert(m_image_ctx.object_map_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_image_ctx.image_lock));
+  ceph_assert(ceph_mutex_is_locked(*m_object_map_lock));
 
   // rebuilding the object map might update on-disk only
   if (m_snap_id == m_image_ctx.snap_id) {

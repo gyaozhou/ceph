@@ -28,7 +28,9 @@
 #include "include/elist.h"
 #include "include/filepath.h"
 
+#include "BatchOp.h"
 #include "MDSCacheObject.h"
+#include "MDSContext.h"
 #include "SimpleLock.h"
 #include "LocalLock.h"
 #include "ScrubHeader.h"
@@ -36,13 +38,10 @@
 class CInode;
 class CDir;
 class Locker;
-class Message;
 class CDentry;
 class LogSegment;
 
 class Session;
-
-
 
 // define an ordering
 bool operator<(const CDentry& l, const CDentry& r);
@@ -124,7 +123,11 @@ public:
     linkage.remote_d_type = dt;
   }
 
-  const char *pin_name(int p) const override {
+  ~CDentry() override {
+    ceph_assert(batch_ops.empty());
+  }
+
+  std::string_view pin_name(int p) const override {
     switch (p) {
     case PIN_INODEPIN: return "inodepin";
     case PIN_FRAGMENTING: return "fragmenting";
@@ -137,7 +140,7 @@ public:
   // -- wait --
   //static const int WAIT_LOCK_OFFSET = 8;
 
-  void add_waiter(uint64_t tag, MDSInternalContextBase *c) override;
+  void add_waiter(uint64_t tag, MDSContext *c) override;
 
   bool is_lt(const MDSCacheObject *r) const override {
     return *this < *static_cast<const CDentry*>(r);
@@ -206,10 +209,10 @@ public:
   void _put() override;
 
   // auth pins
-  bool can_auth_pin() const override;
+  bool can_auth_pin(int *err_ret=nullptr) const override;
   void auth_pin(void *by) override;
   void auth_unpin(void *by) override;
-  void adjust_nested_auth_pins(int adjustment, int diradj, void *by);
+  void adjust_nested_auth_pins(int diradj, void *by);
   bool is_frozen() const override;
   bool is_freezing() const override;
   int get_num_dir_auth_pins() const;
@@ -243,25 +246,11 @@ public:
   bool is_new() const { return state_test(STATE_NEW); }
   void clear_new() { state_clear(STATE_NEW); }
   
-  // -- replication
-  void encode_replica(mds_rank_t mds, bufferlist& bl, bool need_recover) {
-    if (!is_replicated())
-      lock.replicate_relax();
-
-    __u32 nonce = add_replica(mds);
-    encode(nonce, bl);
-    encode(first, bl);
-    encode(linkage.remote_ino, bl);
-    encode(linkage.remote_d_type, bl);
-    lock.encode_state_for_replica(bl);
-    encode(need_recover, bl);
-  }
-  void decode_replica(bufferlist::const_iterator& p, bool is_new);
-
   // -- exporting
   // note: this assumes the dentry already exists.  
   // i.e., the name is already extracted... so we just need the other state.
   void encode_export(bufferlist& bl) {
+    ENCODE_START(1, 1, bl);
     encode(first, bl);
     encode(state, bl);
     encode(version, bl);
@@ -269,6 +258,7 @@ public:
     encode(lock, bl);
     encode(get_replicas(), bl);
     get(PIN_TEMPEXPORTING);
+    ENCODE_FINISH(bl);
   }
   void finish_export() {
     // twiddle
@@ -283,6 +273,7 @@ public:
     put(PIN_TEMPEXPORTING);
   }
   void decode_import(bufferlist::const_iterator& blp, LogSegment *ls) {
+    DECODE_START(1, blp);
     decode(first, blp);
     __u32 nstate;
     decode(nstate, blp);
@@ -299,16 +290,17 @@ public:
     if (is_replicated())
       get(PIN_REPLICATED);
     replica_nonce = 0;
+    DECODE_FINISH(blp);
   }
 
   // -- locking --
   SimpleLock* get_lock(int type) override {
-    assert(type == CEPH_LOCK_DN);
+    ceph_assert(type == CEPH_LOCK_DN);
     return &lock;
   }
   void set_object_info(MDSCacheObjectInfo &info) override;
   void encode_lock_state(int type, bufferlist& bl) override;
-  void decode_lock_state(int type, bufferlist& bl) override;
+  void decode_lock_state(int type, const bufferlist& bl) override;
 
   // ---------------------------------------------
   // replicas (on clients)
@@ -357,6 +349,7 @@ public:
   LocalLock versionlock; // FIXME referenced containers not in mempool
 
   mempool::mds_co::map<client_t,ClientLease*> client_lease_map;
+  std::map<int, std::unique_ptr<BatchOp>> batch_ops;
 
 
 protected:

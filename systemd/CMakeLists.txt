@@ -4,6 +4,7 @@ set(CEPH_SYSTEMD_ENV_DIR "/etc/sysconfig"
   CACHE PATH "Location for systemd service environmental variable settings files")
 set(SYSTEMD_ENV_FILE "${CEPH_SYSTEMD_ENV_DIR}/ceph")
 foreach(service
+    ceph-crash
     ceph-fuse@
     ceph-mds@
     ceph-mgr@
@@ -11,6 +12,7 @@ foreach(service
     ceph-osd@
     ceph-radosgw@
     ceph-rbd-mirror@
+    ceph-immutable-object-cache@
     rbdmap)
   configure_file(
     ${service}.service.in
@@ -30,5 +32,6 @@ install(FILES
   ceph-mds.target
   ceph-radosgw.target
   ceph-rbd-mirror.target
+  ceph-immutable-object-cache.target
   ceph-volume@.service
   DESTINATION ${CMAKE_INSTALL_SYSTEMD_SERVICEDIR})

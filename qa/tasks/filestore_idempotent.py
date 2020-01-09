@@ -13,7 +13,7 @@ def task(ctx, config):
     """
     Test filestore/filejournal handling of non-idempotent events.
 
-    Currently this is a kludge; we require the ceph task preceeds us just
+    Currently this is a kludge; we require the ceph task precedes us just
     so that we get the tarball installed to run the test binary.
 
     :param ctx: Context
@@ -32,7 +32,7 @@ def task(ctx, config):
 
     # just use the first client...
     client = clients[0];
-    (remote,) = ctx.cluster.only(client).remotes.iterkeys()
+    (remote,) = ctx.cluster.only(client).remotes.keys()
 
     testdir = teuthology.get_testdir(ctx)
 

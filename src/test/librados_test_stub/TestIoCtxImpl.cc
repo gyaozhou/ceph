@@ -6,7 +6,7 @@
 #include "test/librados_test_stub/TestRadosClient.h"
 #include "test/librados_test_stub/TestWatchNotify.h"
 #include "librados/AioCompletionImpl.h"
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "common/Finisher.h"
 #include "common/valgrind.h"
 #include "objclass/objclass.h"
@@ -40,7 +40,7 @@ TestIoCtxImpl::TestIoCtxImpl(const TestIoCtxImpl& rhs)
 }
 
 TestIoCtxImpl::~TestIoCtxImpl() {
-  assert(m_pending_ops == 0);
+  ceph_assert(m_pending_ops == 0);
 }
 
 void TestObjectOperationImpl::get() {
@@ -210,7 +210,7 @@ int TestIoCtxImpl::operate(const std::string& oid, TestObjectOperationImpl &ops)
     &TestIoCtxImpl::execute_aio_operations, this, oid, &ops,
     reinterpret_cast<bufferlist*>(0), m_snapc), comp);
 
-  comp->wait_for_safe();
+  comp->wait_for_complete();
   int ret = comp->get_return_value();
   comp->put();
   return ret;
@@ -278,7 +278,7 @@ int TestIoCtxImpl::tmap_update(const std::string& oid, bufferlist& cmdbl) {
   uint64_t size = 0;
   int r = stat(oid, &size, NULL);
   if (r == -ENOENT) {
-    r = create(oid, false);
+    r = create(oid, false, m_snapc);
   }
   if (r < 0) {
     return r;

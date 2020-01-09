@@ -13,6 +13,7 @@
 #include "include/rados/librados.hpp"
 #include "include/interval_set.h"
 #include "common/errno.h"
+#include "common/Cond.h"
 #include "common/Throttle.h"
 #include "osdc/Striper.h"
 #include "librados/snap_set_diff.h"
@@ -52,7 +53,7 @@ struct DiffContext {
     : callback(callback), callback_arg(callback_arg),
       whole_object(_whole_object), from_snap_id(_from_snap_id),
       end_snap_id(_end_snap_id),
-      throttle(image_ctx.concurrent_management_ops, true) {
+      throttle(image_ctx.config.template get_val<uint64_t>("rbd_concurrent_management_ops"), true) {
   }
 };
 
@@ -76,7 +77,7 @@ public:
     op.list_snaps(&m_snap_set, &m_snap_ret);
 
     int r = m_head_ctx.aio_operate(m_oid, rados_completion, &op, NULL);
-    assert(r == 0);
+    ceph_assert(r == 0);
     rados_completion->release();
   }
 
@@ -187,7 +188,7 @@ private:
         }
         opos += r->second;
       }
-      assert(opos == q->offset + q->length);
+      ceph_assert(opos == q->offset + q->length);
     }
   }
 
@@ -238,12 +239,16 @@ int DiffIterate<I>::diff_iterate(I *ictx,
   ldout(ictx->cct, 20) << "diff_iterate " << ictx << " off = " << off
       		 << " len = " << len << dendl;
 
+  if (!ictx->data_ctx.is_valid()) {
+    return -ENODEV;
+  }
+
   // ensure previous writes are visible to listsnaps
   C_SaferCond flush_ctx;
   {
-    RWLock::RLocker owner_locker(ictx->owner_lock);
-    auto aio_comp = io::AioCompletion::create(&flush_ctx, ictx,
-                                              io::AIO_TYPE_FLUSH);
+    std::shared_lock owner_locker{ictx->owner_lock};
+    auto aio_comp = io::AioCompletion::create_and_start(&flush_ctx, ictx,
+                                                        io::AIO_TYPE_FLUSH);
     auto req = io::ImageDispatchSpec<I>::create_flush_request(
       *ictx, aio_comp, io::FLUSH_SOURCE_INTERNAL, {});
     req->send();
@@ -259,9 +264,9 @@ int DiffIterate<I>::diff_iterate(I *ictx,
     return r;
   }
 
-  ictx->snap_lock.get_read();
+  ictx->image_lock.lock_shared();
   r = clip_io(ictx, off, &len);
-  ictx->snap_lock.put_read();
+  ictx->image_lock.unlock_shared();
   if (r < 0) {
     return r;
   }
@@ -276,14 +281,15 @@ template <typename I>
 int DiffIterate<I>::execute() {
   CephContext* cct = m_image_ctx.cct;
 
+  ceph_assert(m_image_ctx.data_ctx.is_valid());
+
   librados::IoCtx head_ctx;
   librados::snap_t from_snap_id = 0;
   librados::snap_t end_snap_id;
   uint64_t from_size = 0;
   uint64_t end_size;
   {
-    RWLock::RLocker md_locker(m_image_ctx.md_lock);
-    RWLock::RLocker snap_locker(m_image_ctx.snap_lock);
+    std::shared_lock image_locker{m_image_ctx.image_lock};
     head_ctx.dup(m_image_ctx.data_ctx);
     if (m_from_snap_name) {
       from_snap_id = m_image_ctx.get_snap_id(m_from_snap_namespace, m_from_snap_name);
@@ -308,7 +314,7 @@ int DiffIterate<I>::execute() {
   bool fast_diff_enabled = false;
   BitVector<2> object_diff_state;
   {
-    RWLock::RLocker snap_locker(m_image_ctx.snap_lock);
+    std::shared_lock image_locker{m_image_ctx.image_lock};
     if (m_whole_object && (m_image_ctx.features & RBD_FEATURE_FAST_DIFF) != 0) {
       r = diff_object_map(from_snap_id, end_snap_id, &object_diff_state);
       if (r < 0) {
@@ -331,8 +337,7 @@ int DiffIterate<I>::execute() {
   DiffContext diff_context(m_image_ctx, m_callback, m_callback_arg,
                            m_whole_object, from_snap_id, end_snap_id);
   if (m_include_parent && from_snap_id == 0) {
-    RWLock::RLocker l(m_image_ctx.snap_lock);
-    RWLock::RLocker l2(m_image_ctx.parent_lock);
+    std::shared_lock image_locker{m_image_ctx.image_lock};
     uint64_t overlap = 0;
     m_image_ctx.get_parent_overlap(m_image_ctx.snap_id, &overlap);
     r = 0;
@@ -372,7 +377,25 @@ int DiffIterate<I>::execute() {
 
       if (fast_diff_enabled) {
         const uint64_t object_no = p->second.front().objectno;
-        if (object_diff_state[object_no] != OBJECT_DIFF_STATE_NONE) {
+        if (object_diff_state[object_no] == OBJECT_DIFF_STATE_NONE &&
+            from_snap_id == 0 && !diff_context.parent_diff.empty()) {
+          // no data in child object -- report parent diff instead
+          for (auto& oe : p->second) {
+            for (auto& be : oe.buffer_extents) {
+              interval_set<uint64_t> o;
+              o.insert(off + be.first, be.second);
+              o.intersection_of(diff_context.parent_diff);
+              ldout(cct, 20) << " reporting parent overlap " << o << dendl;
+              for (auto e = o.begin(); e != o.end(); ++e) {
+                r = m_callback(e.get_start(), e.get_len(), true,
+                               m_callback_arg);
+                if (r < 0) {
+                  return r;
+                }
+              }
+            }
+          }
+        } else if (object_diff_state[object_no] != OBJECT_DIFF_STATE_NONE) {
           bool updated = (object_diff_state[object_no] ==
                             OBJECT_DIFF_STATE_UPDATED);
           for (std::vector<ObjectExtent>::iterator q = p->second.begin();
@@ -411,7 +434,7 @@ int DiffIterate<I>::execute() {
 template <typename I>
 int DiffIterate<I>::diff_object_map(uint64_t from_snap_id, uint64_t to_snap_id,
                                     BitVector<2>* object_diff_state) {
-  assert(m_image_ctx.snap_lock.is_locked());
+  ceph_assert(ceph_mutex_is_locked(m_image_ctx.image_lock));
   CephContext* cct = m_image_ctx.cct;
 
   bool diff_from_start = (from_snap_id == 0);
@@ -433,7 +456,7 @@ int DiffIterate<I>::diff_object_map(uint64_t from_snap_id, uint64_t to_snap_id,
     if (current_snap_id != CEPH_NOSNAP) {
       std::map<librados::snap_t, SnapInfo>::const_iterator snap_it =
         m_image_ctx.snap_info.find(current_snap_id);
-      assert(snap_it != m_image_ctx.snap_info.end());
+      ceph_assert(snap_it != m_image_ctx.snap_info.end());
       current_size = snap_it->second.size;
 
       ++snap_it;

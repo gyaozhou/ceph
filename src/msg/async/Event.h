@@ -95,6 +95,7 @@ class EventCenter {
   struct AssociatedCenters {
     EventCenter *centers[MAX_EVENTCENTER];
     AssociatedCenters() {
+      // FIPS zeroization audit 20191115: this memset is not security related.
       memset(centers, 0, MAX_EVENTCENTER * sizeof(EventCenter*));
     }
   };
@@ -172,12 +173,12 @@ class EventCenter {
   int notify_send_fd;
   NetHandler net;
   EventCallbackRef notify_handler;
-  unsigned idx;
+  unsigned center_id;
   AssociatedCenters *global_centers = nullptr;
 
   int process_time_events();
   FileEvent *_get_file_event(int fd) {
-    assert(fd < nevent);
+    ceph_assert(fd < nevent);
     return &file_events[fd];
   }
 
@@ -187,14 +188,14 @@ class EventCenter {
     external_num_events(0),
     driver(NULL), time_event_next_id(1),
     notify_receive_fd(-1), notify_send_fd(-1), net(c),
-    notify_handler(NULL), idx(0) { }
+    notify_handler(NULL), center_id(0) { }
   ~EventCenter();
   ostream& _event_prefix(std::ostream *_dout);
 
-  int init(int nevent, unsigned idx, const std::string &t);
+  int init(int nevent, unsigned center_id, const std::string &type);
   void set_owner();
   pthread_t get_owner() const { return owner; }
-  unsigned get_id() const { return idx; }
+  unsigned get_id() const { return center_id; }
 
   EventDriver *get_driver() { return driver; }
 
@@ -221,8 +222,8 @@ class EventCenter {
     func f;
     bool nonwait;
    public:
-    C_submit_event(func &&_f, bool nw)
-      : f(std::move(_f)), nonwait(nw) {}
+    C_submit_event(func &&_f, bool nowait)
+      : f(std::move(_f)), nonwait(nowait) {}
     void do_request(uint64_t id) override {
       f();
       lock.lock();
@@ -234,7 +235,7 @@ class EventCenter {
         delete this;
     }
     void wait() {
-      assert(!nonwait);
+      ceph_assert(!nonwait);
       std::unique_lock<std::mutex> l(lock);
       while (!done)
         cond.wait(l);
@@ -244,16 +245,15 @@ class EventCenter {
  public:
   template <typename func>
   void submit_to(int i, func &&f, bool nowait = false) {
-    assert(i < MAX_EVENTCENTER && global_centers);
+    ceph_assert(i < MAX_EVENTCENTER && global_centers);
     EventCenter *c = global_centers->centers[i];
-    assert(c);
-    if (!nowait && c->in_thread()) {
-      f();
-      return ;
-    }
+    ceph_assert(c);
     if (nowait) {
       C_submit_event<func> *event = new C_submit_event<func>(std::move(f), true);
       c->dispatch_event_external(event);
+    } else if (c->in_thread()) {
+      f();
+      return;
     } else {
       C_submit_event<func> event(std::move(f), false);
       c->dispatch_event_external(&event);

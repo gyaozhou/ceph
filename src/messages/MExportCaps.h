@@ -19,19 +19,24 @@
 #include "msg/Message.h"
 
 
-class MExportCaps : public Message {
- public:  
+class MExportCaps : public SafeMessage {
+private:
+  static constexpr int HEAD_VERSION = 2;
+  static constexpr int COMPAT_VERSION = 1;
+
+public:  
   inodeno_t ino;
   bufferlist cap_bl;
   map<client_t,entity_inst_t> client_map;
+  map<client_t,client_metadata_t> client_metadata_map;
 
+protected:
   MExportCaps() :
-    Message(MSG_MDS_EXPORTCAPS) {}
-private:
+    SafeMessage{MSG_MDS_EXPORTCAPS, HEAD_VERSION, COMPAT_VERSION} {}
   ~MExportCaps() override {}
 
 public:
-  const char *get_type_name() const override { return "export_caps"; }
+  std::string_view get_type_name() const override { return "export_caps"; }
   void print(ostream& o) const override {
     o << "export_caps(" << ino << ")";
   }
@@ -41,14 +46,19 @@ public:
     encode(ino, payload);
     encode(cap_bl, payload);
     encode(client_map, payload, features);
+    encode(client_metadata_map, payload);
   }
   void decode_payload() override {
     auto p = payload.cbegin();
     decode(ino, p);
     decode(cap_bl, p);
     decode(client_map, p);
+    if (header.version >= 2)
+      decode(client_metadata_map, p);
   }
-
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

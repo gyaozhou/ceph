@@ -6,19 +6,21 @@ import contextlib
 import logging
 import random
 import signal
+import socket
 import time
 
 from gevent import sleep
 from gevent.greenlet import Greenlet
 from gevent.event import Event
 
-from teuthology import misc
-from teuthology.task import Task
+from teuthology.exceptions import CommandFailedError
+from teuthology.orchestra import run
+from tasks.thrasher import Thrasher
 
 log = logging.getLogger(__name__)
 
 
-class RBDMirrorThrasher(Greenlet):
+class RBDMirrorThrasher(Thrasher, Greenlet):
     """
     RBDMirrorThrasher::
 
@@ -60,14 +62,13 @@ class RBDMirrorThrasher(Greenlet):
     """
 
     def __init__(self, ctx, config, cluster, daemons):
-        Greenlet.__init__(self)
+        super(RBDMirrorThrasher, self).__init__()
 
         self.ctx = ctx
         self.config = config
         self.cluster = cluster
         self.daemons = daemons
 
-        self.e = None
         self.logger = log
         self.name = 'thrasher.rbd_mirror.[{cluster}]'.format(cluster = cluster)
         self.stopping = Event()
@@ -82,8 +83,11 @@ class RBDMirrorThrasher(Greenlet):
         try:
             self.do_thrash()
         except Exception as e:
-            self.e = e
+            # See _run exception comment for MDSThrasher
+            self.set_thrasher_exception(e)
             self.logger.exception("exception:")
+            # Allow successful completion so gevent doesn't see an exception.
+            # The DaemonWatchdog will observe the error and tear down the test.
 
     def log(self, x):
         """Write data to logger assigned to this RBDMirrorThrasher"""
@@ -125,7 +129,10 @@ class RBDMirrorThrasher(Greenlet):
                     continue
 
                 self.log('kill {label}'.format(label=daemon.id_))
-                daemon.signal(signal.SIGTERM)
+                try:
+                    daemon.signal(signal.SIGTERM)
+                except socket.error:
+                    pass
                 killed_daemons.append(daemon)
                 stats['kill'] += 1
 
@@ -136,7 +143,6 @@ class RBDMirrorThrasher(Greenlet):
 
             if killed_daemons:
                 # wait for a while before restarting
-
                 delay = self.max_revive_delay
                 if self.randomize:
                     delay = random.randrange(0.0, self.max_revive_delay)
@@ -146,7 +152,22 @@ class RBDMirrorThrasher(Greenlet):
 
                 for daemon in killed_daemons:
                     self.log('waiting for {label}'.format(label=daemon.id_))
-                    daemon.stop()
+                    try:
+                        run.wait([daemon.proc], timeout=600)
+                    except CommandFailedError:
+                        pass
+                    except:
+                        self.log('Failed to stop {label}'.format(label=daemon.id_))
+
+                        try:
+                            # try to capture a core dump
+                            daemon.signal(signal.SIGABRT)
+                        except socket.error:
+                            pass
+                        raise
+                    finally:
+                        daemon.reset()
+
                 for daemon in killed_daemons:
                     self.log('reviving {label}'.format(label=daemon.id_))
                     daemon.start()
@@ -183,6 +204,7 @@ def task(ctx, config):
 
     thrasher = RBDMirrorThrasher(ctx, config, cluster, daemons)
     thrasher.start()
+    ctx.ceph[cluster].thrashers.append(thrasher)
 
     try:
         log.debug('Yielding')
@@ -190,7 +212,7 @@ def task(ctx, config):
     finally:
         log.info('joining rbd_mirror_thrash')
         thrasher.stop()
-        if thrasher.e:
+        if thrasher.exception is not None:
             raise RuntimeError('error during thrashing')
         thrasher.join()
         log.info('done joining')

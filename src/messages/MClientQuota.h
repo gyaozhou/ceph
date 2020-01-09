@@ -3,20 +3,21 @@
 
 #include "msg/Message.h"
 
-struct MClientQuota : public Message {
+class MClientQuota : public SafeMessage {
+public:
   inodeno_t ino;
   nest_info_t rstat;
   quota_info_t quota;
 
+protected:
   MClientQuota() :
-    Message(CEPH_MSG_CLIENT_QUOTA),
+    SafeMessage{CEPH_MSG_CLIENT_QUOTA},
     ino(0)
   {}
-private:
   ~MClientQuota() override {}
 
 public:
-  const char *get_type_name() const override { return "client_quota"; }
+  std::string_view get_type_name() const override { return "client_quota"; }
   void print(ostream& out) const override {
     out << "client_quota(";
     out << " [" << ino << "] ";
@@ -42,8 +43,11 @@ public:
     decode(rstat.rfiles, p);
     decode(rstat.rsubdirs, p);
     decode(quota, p);
-    assert(p.end());
+    ceph_assert(p.end());
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

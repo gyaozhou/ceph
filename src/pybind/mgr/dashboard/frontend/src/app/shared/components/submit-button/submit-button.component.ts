@@ -1,5 +1,6 @@
 import { Component, ElementRef, EventEmitter, Input, OnInit, Output } from '@angular/core';
 import { AbstractControl, FormGroup, FormGroupDirective, NgForm } from '@angular/forms';
+import { Icons } from '../../../shared/enum/icons.enum';
 
 import * as _ from 'lodash';
 
@@ -27,11 +28,17 @@ import * as _ from 'lodash';
   styleUrls: ['./submit-button.component.scss']
 })
 export class SubmitButtonComponent implements OnInit {
-  @Input() form: FormGroup | NgForm;
-  @Input() type = 'submit';
-  @Output() submitAction = new EventEmitter();
+  @Input()
+  form: FormGroup | NgForm;
+  @Input()
+  type = 'submit';
+  @Output()
+  submitAction = new EventEmitter();
+  @Input()
+  disabled = false;
 
   loading = false;
+  icons = Icons;
 
   constructor(private elRef: ElementRef) {}
 
@@ -40,7 +47,7 @@ export class SubmitButtonComponent implements OnInit {
       if (_.has(this.form.errors, 'cdSubmitButton')) {
         this.loading = false;
         _.unset(this.form.errors, 'cdSubmitButton');
-         // Handle Reactive forms.
+        // Handle Reactive forms.
         if (this.form instanceof AbstractControl) {
           (<AbstractControl>this.form).updateValueAndValidity();
         }
@@ -66,9 +73,7 @@ export class SubmitButtonComponent implements OnInit {
   }
 
   focusButton() {
-    this.elRef.nativeElement.offsetParent.querySelector(
-      `button[type="${this.type}"]`
-    ).focus();
+    this.elRef.nativeElement.offsetParent.querySelector(`button[type="${this.type}"]`).focus();
   }
 
   focusInvalid() {

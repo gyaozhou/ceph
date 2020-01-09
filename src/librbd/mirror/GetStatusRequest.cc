@@ -25,7 +25,8 @@ using librbd::util::create_rados_callback;
 template <typename I>
 void GetStatusRequest<I>::send() {
   *m_mirror_image_status = cls::rbd::MirrorImageStatus(
-    cls::rbd::MIRROR_IMAGE_STATUS_STATE_UNKNOWN, "status not found");
+    {{cls::rbd::MirrorImageSiteStatus::LOCAL_FSID,
+      cls::rbd::MIRROR_IMAGE_STATUS_STATE_UNKNOWN, "status not found"}});
 
   get_info();
 }
@@ -72,7 +73,7 @@ void GetStatusRequest<I>::get_status() {
   librados::AioCompletion *comp = create_rados_callback<
     GetStatusRequest<I>, &GetStatusRequest<I>::handle_get_status>(this);
   int r = m_image_ctx.md_ctx.aio_operate(RBD_MIRRORING, comp, &op, &m_out_bl);
-  assert(r == 0);
+  ceph_assert(r == 0);
   comp->release();
 }
 

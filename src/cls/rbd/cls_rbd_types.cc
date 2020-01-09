@@ -8,41 +8,85 @@
 namespace cls {
 namespace rbd {
 
+std::ostream& operator<<(std::ostream& os,
+                         MirrorPeerDirection mirror_peer_direction) {
+  switch (mirror_peer_direction) {
+  case MIRROR_PEER_DIRECTION_RX:
+    os << "RX";
+    break;
+  case MIRROR_PEER_DIRECTION_TX:
+    os << "TX";
+    break;
+  case MIRROR_PEER_DIRECTION_RX_TX:
+    os << "RX/TX";
+    break;
+  default:
+    os << "unknown";
+    break;
+  }
+  return os;
+}
+
 void MirrorPeer::encode(bufferlist &bl) const {
-  ENCODE_START(1, 1, bl);
+  ENCODE_START(2, 1, bl);
   encode(uuid, bl);
-  encode(cluster_name, bl);
+  encode(site_name, bl);
   encode(client_name, bl);
+  int64_t pool_id = -1;
   encode(pool_id, bl);
+
+  // v2
+  encode(static_cast<uint8_t>(mirror_peer_direction), bl);
+  encode(fsid, bl);
+  encode(last_seen, bl);
   ENCODE_FINISH(bl);
 }
 
 void MirrorPeer::decode(bufferlist::const_iterator &it) {
-  DECODE_START(1, it);
+  DECODE_START(2, it);
   decode(uuid, it);
-  decode(cluster_name, it);
+  decode(site_name, it);
   decode(client_name, it);
+  int64_t pool_id;
   decode(pool_id, it);
+
+  if (struct_v >= 2) {
+    uint8_t mpd;
+    decode(mpd, it);
+    mirror_peer_direction = static_cast<MirrorPeerDirection>(mpd);
+    decode(fsid, it);
+    decode(last_seen, it);
+  }
+
   DECODE_FINISH(it);
 }
 
 void MirrorPeer::dump(Formatter *f) const {
   f->dump_string("uuid", uuid);
-  f->dump_string("cluster_name", cluster_name);
+  f->dump_stream("direction") << mirror_peer_direction;
+  f->dump_string("site_name", site_name);
+  f->dump_string("fsid", fsid);
   f->dump_string("client_name", client_name);
-  f->dump_int("pool_id", pool_id);
+  f->dump_stream("last_seen") << last_seen;
 }
 
 void MirrorPeer::generate_test_instances(std::list<MirrorPeer*> &o) {
   o.push_back(new MirrorPeer());
-  o.push_back(new MirrorPeer("uuid-123", "cluster name", "client name", 123));
+  o.push_back(new MirrorPeer("uuid-123", MIRROR_PEER_DIRECTION_RX, "site A",
+                             "client name", ""));
+  o.push_back(new MirrorPeer("uuid-234", MIRROR_PEER_DIRECTION_TX, "site B",
+                             "", "fsid"));
+  o.push_back(new MirrorPeer("uuid-345", MIRROR_PEER_DIRECTION_RX_TX, "site C",
+                             "client name", "fsid"));
 }
 
 bool MirrorPeer::operator==(const MirrorPeer &rhs) const {
   return (uuid == rhs.uuid &&
-          cluster_name == rhs.cluster_name &&
+          mirror_peer_direction == rhs.mirror_peer_direction &&
+          site_name == rhs.site_name &&
           client_name == rhs.client_name &&
-          pool_id == rhs.pool_id);
+          fsid == rhs.fsid &&
+          last_seen == rhs.last_seen);
 }
 
 std::ostream& operator<<(std::ostream& os, const MirrorMode& mirror_mode) {
@@ -66,49 +110,79 @@ std::ostream& operator<<(std::ostream& os, const MirrorMode& mirror_mode) {
 std::ostream& operator<<(std::ostream& os, const MirrorPeer& peer) {
   os << "["
      << "uuid=" << peer.uuid << ", "
-     << "cluster_name=" << peer.cluster_name << ", "
-     << "client_name=" << peer.client_name;
-  if (peer.pool_id != -1) {
-    os << ", pool_id=" << peer.pool_id;
-  }
-  os << "]";
+     << "direction=" << peer.mirror_peer_direction << ", "
+     << "site_name=" << peer.site_name << ", "
+     << "client_name=" << peer.client_name << ", "
+     << "fsid=" << peer.fsid << ", "
+     << "last_seen=" << peer.last_seen
+     << "]";
   return os;
 }
 
 void MirrorImage::encode(bufferlist &bl) const {
-  ENCODE_START(1, 1, bl);
+  ENCODE_START(2, 1, bl);
   encode(global_image_id, bl);
   encode(static_cast<uint8_t>(state), bl);
+  encode(static_cast<uint8_t>(mode), bl);
   ENCODE_FINISH(bl);
 }
 
 void MirrorImage::decode(bufferlist::const_iterator &it) {
   uint8_t int_state;
-  DECODE_START(1, it);
+  DECODE_START(2, it);
   decode(global_image_id, it);
   decode(int_state, it);
   state = static_cast<MirrorImageState>(int_state);
+  if (struct_v >= 2) {
+    uint8_t int_mode;
+    decode(int_mode, it);
+    mode = static_cast<MirrorImageMode>(int_mode);
+  }
   DECODE_FINISH(it);
 }
 
 void MirrorImage::dump(Formatter *f) const {
+  f->dump_stream("mode") << mode;
   f->dump_string("global_image_id", global_image_id);
-  f->dump_int("state", state);
+  f->dump_stream("state") << state;
 }
 
 void MirrorImage::generate_test_instances(std::list<MirrorImage*> &o) {
   o.push_back(new MirrorImage());
-  o.push_back(new MirrorImage("uuid-123", MIRROR_IMAGE_STATE_ENABLED));
-  o.push_back(new MirrorImage("uuid-abc", MIRROR_IMAGE_STATE_DISABLING));
+  o.push_back(new MirrorImage(MIRROR_IMAGE_MODE_JOURNAL, "uuid-123",
+                              MIRROR_IMAGE_STATE_ENABLED));
+  o.push_back(new MirrorImage(MIRROR_IMAGE_MODE_SNAPSHOT, "uuid-abc",
+                              MIRROR_IMAGE_STATE_DISABLING));
 }
 
 bool MirrorImage::operator==(const MirrorImage &rhs) const {
-  return global_image_id == rhs.global_image_id && state == rhs.state;
+  return mode == rhs.mode && global_image_id == rhs.global_image_id &&
+         state == rhs.state;
 }
 
 bool MirrorImage::operator<(const MirrorImage &rhs) const {
-  return global_image_id < rhs.global_image_id ||
-	(global_image_id == rhs.global_image_id  && state < rhs.state);
+  if (mode != rhs.mode) {
+    return mode < rhs.mode;
+  }
+  if (global_image_id != rhs.global_image_id) {
+    return global_image_id < rhs.global_image_id;
+  }
+  return state < rhs.state;
+}
+
+std::ostream& operator<<(std::ostream& os, const MirrorImageMode& mirror_mode) {
+  switch (mirror_mode) {
+  case MIRROR_IMAGE_MODE_JOURNAL:
+    os << "journal";
+    break;
+  case MIRROR_IMAGE_MODE_SNAPSHOT:
+    os << "snapshot";
+    break;
+  default:
+    os << "unknown (" << static_cast<uint32_t>(mirror_mode) << ")";
+    break;
+  }
+  return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const MirrorImageState& mirror_state) {
@@ -119,6 +193,9 @@ std::ostream& operator<<(std::ostream& os, const MirrorImageState& mirror_state)
   case MIRROR_IMAGE_STATE_ENABLED:
     os << "enabled";
     break;
+  case MIRROR_IMAGE_STATE_DISABLED:
+    os << "disabled";
+    break;
   default:
     os << "unknown (" << static_cast<uint32_t>(mirror_state) << ")";
     break;
@@ -128,53 +205,14 @@ std::ostream& operator<<(std::ostream& os, const MirrorImageState& mirror_state)
 
 std::ostream& operator<<(std::ostream& os, const MirrorImage& mirror_image) {
   os << "["
+     << "mode=" << mirror_image.mode << ", "
      << "global_image_id=" << mirror_image.global_image_id << ", "
      << "state=" << mirror_image.state << "]";
   return os;
 }
 
-void MirrorImageStatus::encode(bufferlist &bl) const {
-  ENCODE_START(1, 1, bl);
-  encode(state, bl);
-  encode(description, bl);
-  encode(last_update, bl);
-  encode(up, bl);
-  ENCODE_FINISH(bl);
-}
-
-void MirrorImageStatus::decode(bufferlist::const_iterator &it) {
-  DECODE_START(1, it);
-  decode(state, it);
-  decode(description, it);
-  decode(last_update, it);
-  decode(up, it);
-  DECODE_FINISH(it);
-}
-
-void MirrorImageStatus::dump(Formatter *f) const {
-  f->dump_string("state", state_to_string());
-  f->dump_string("description", description);
-  f->dump_stream("last_update") << last_update;
-}
-
-std::string MirrorImageStatus::state_to_string() const {
-  std::stringstream ss;
-  ss << (up ? "up+" : "down+") << state;
-  return ss.str();
-}
-
-void MirrorImageStatus::generate_test_instances(
-  std::list<MirrorImageStatus*> &o) {
-  o.push_back(new MirrorImageStatus());
-  o.push_back(new MirrorImageStatus(MIRROR_IMAGE_STATUS_STATE_REPLAYING));
-  o.push_back(new MirrorImageStatus(MIRROR_IMAGE_STATUS_STATE_ERROR, "error"));
-}
-
-bool MirrorImageStatus::operator==(const MirrorImageStatus &rhs) const {
-  return state == rhs.state && description == rhs.description && up == rhs.up;
-}
-
-std::ostream& operator<<(std::ostream& os, const MirrorImageStatusState& state) {
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorImageStatusState& state) {
   switch (state) {
   case MIRROR_IMAGE_STATUS_STATE_UNKNOWN:
     os << "unknown";
@@ -204,36 +242,316 @@ std::ostream& operator<<(std::ostream& os, const MirrorImageStatusState& state) 
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const MirrorImageStatus& status) {
-  os << "["
+const std::string MirrorImageSiteStatus::LOCAL_FSID(""); // empty fsid
+
+void MirrorImageSiteStatus::encode_meta(uint8_t version, bufferlist &bl) const {
+  if (version >= 2) {
+    ceph::encode(fsid, bl);
+  }
+  cls::rbd::encode(state, bl);
+  ceph::encode(description, bl);
+  ceph::encode(last_update, bl);
+  ceph::encode(up, bl);
+}
+
+void MirrorImageSiteStatus::decode_meta(uint8_t version,
+                                        bufferlist::const_iterator &it) {
+  if (version < 2) {
+    fsid = LOCAL_FSID;
+  } else {
+    ceph::decode(fsid, it);
+  }
+
+  cls::rbd::decode(state, it);
+  ceph::decode(description, it);
+  ::decode(last_update, it);
+  ceph::decode(up, it);
+}
+
+void MirrorImageSiteStatus::encode(bufferlist &bl) const {
+  // break compatibility when site-name is provided
+  uint8_t version = (fsid == LOCAL_FSID ? 1 : 2);
+  ENCODE_START(version, version, bl);
+  encode_meta(version, bl);
+  ENCODE_FINISH(bl);
+}
+
+void MirrorImageSiteStatus::decode(bufferlist::const_iterator &it) {
+  DECODE_START(2, it);
+  decode_meta(struct_v, it);
+  DECODE_FINISH(it);
+}
+
+void MirrorImageSiteStatus::dump(Formatter *f) const {
+  f->dump_string("state", state_to_string());
+  f->dump_string("description", description);
+  f->dump_stream("last_update") << last_update;
+}
+
+std::string MirrorImageSiteStatus::state_to_string() const {
+  std::stringstream ss;
+  ss << (up ? "up+" : "down+") << state;
+  return ss.str();
+}
+
+void MirrorImageSiteStatus::generate_test_instances(
+  std::list<MirrorImageSiteStatus*> &o) {
+  o.push_back(new MirrorImageSiteStatus());
+  o.push_back(new MirrorImageSiteStatus("", MIRROR_IMAGE_STATUS_STATE_REPLAYING,
+                                        ""));
+  o.push_back(new MirrorImageSiteStatus("", MIRROR_IMAGE_STATUS_STATE_ERROR,
+                                        "error"));
+  o.push_back(new MirrorImageSiteStatus("2fb68ca9-1ba0-43b3-8cdf-8c5a9db71e65",
+                                        MIRROR_IMAGE_STATUS_STATE_STOPPED, ""));
+}
+
+bool MirrorImageSiteStatus::operator==(const MirrorImageSiteStatus &rhs) const {
+  return state == rhs.state && description == rhs.description && up == rhs.up;
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorImageSiteStatus& status) {
+  os << "{"
      << "state=" << status.state_to_string() << ", "
      << "description=" << status.description << ", "
-     << "last_update=" << status.last_update << "]";
+     << "last_update=" << status.last_update << "]}";
   return os;
 }
 
-void ChildImageSpec::encode(bufferlist &bl) const {
+void MirrorImageSiteStatusOnDisk::encode_meta(bufferlist &bl,
+                                              uint64_t features) const {
+  ENCODE_START(1, 1, bl);
+  auto sanitized_origin = origin;
+  sanitize_entity_inst(&sanitized_origin);
+  encode(sanitized_origin, bl, features);
+  ENCODE_FINISH(bl);
+}
+
+void MirrorImageSiteStatusOnDisk::encode(bufferlist &bl,
+                                         uint64_t features) const {
+  encode_meta(bl, features);
+  cls::rbd::MirrorImageSiteStatus::encode(bl);
+}
+
+void MirrorImageSiteStatusOnDisk::decode_meta(bufferlist::const_iterator &it) {
+  DECODE_START(1, it);
+  decode(origin, it);
+  sanitize_entity_inst(&origin);
+  DECODE_FINISH(it);
+}
+
+void MirrorImageSiteStatusOnDisk::decode(bufferlist::const_iterator &it) {
+  decode_meta(it);
+  cls::rbd::MirrorImageSiteStatus::decode(it);
+}
+
+void MirrorImageSiteStatusOnDisk::generate_test_instances(
+    std::list<MirrorImageSiteStatusOnDisk*> &o) {
+  o.push_back(new MirrorImageSiteStatusOnDisk());
+  o.push_back(new MirrorImageSiteStatusOnDisk(
+    {"", MIRROR_IMAGE_STATUS_STATE_ERROR, "error"}));
+  o.push_back(new MirrorImageSiteStatusOnDisk(
+    {"siteA", MIRROR_IMAGE_STATUS_STATE_STOPPED, ""}));
+}
+
+int MirrorImageStatus::get_local_mirror_image_site_status(
+    MirrorImageSiteStatus* status) const {
+  auto it = std::find_if(
+    mirror_image_site_statuses.begin(),
+    mirror_image_site_statuses.end(),
+    [](const MirrorImageSiteStatus& status) {
+      return status.fsid == MirrorImageSiteStatus::LOCAL_FSID;
+    });
+  if (it == mirror_image_site_statuses.end()) {
+    return -ENOENT;
+  }
+
+  *status = *it;
+  return 0;
+}
+
+void MirrorImageStatus::encode(bufferlist &bl) const {
+  // don't break compatibility for extra site statuses
+  ENCODE_START(2, 1, bl);
+
+  // local site status
+  MirrorImageSiteStatus local_status;
+  int r = get_local_mirror_image_site_status(&local_status);
+  local_status.encode_meta(1, bl);
+
+  bool local_status_valid = (r >= 0);
+  encode(local_status_valid, bl);
+
+  // remote site statuses
+  __u32 n = mirror_image_site_statuses.size();
+  if (local_status_valid) {
+    --n;
+  }
+  encode(n, bl);
+
+  for (auto& status : mirror_image_site_statuses) {
+    if (status.fsid == MirrorImageSiteStatus::LOCAL_FSID) {
+      continue;
+    }
+    status.encode_meta(2, bl);
+  }
+  ENCODE_FINISH(bl);
+}
+
+void MirrorImageStatus::decode(bufferlist::const_iterator &it) {
+  DECODE_START(2, it);
+
+  // local site status
+  MirrorImageSiteStatus local_status;
+  local_status.decode_meta(1, it);
+
+  if (struct_v < 2) {
+    mirror_image_site_statuses.push_back(local_status);
+  } else {
+    bool local_status_valid;
+    decode(local_status_valid, it);
+
+    __u32 n;
+    decode(n, it);
+    if (local_status_valid) {
+      ++n;
+    }
+
+    mirror_image_site_statuses.resize(n);
+    for (auto status_it = mirror_image_site_statuses.begin();
+         status_it != mirror_image_site_statuses.end(); ++status_it) {
+      if (local_status_valid &&
+          status_it == mirror_image_site_statuses.begin()) {
+        *status_it = local_status;
+        continue;
+      }
+
+      // remote site status
+      status_it->decode_meta(struct_v, it);
+    }
+  }
+  DECODE_FINISH(it);
+}
+
+void MirrorImageStatus::dump(Formatter *f) const {
+  MirrorImageSiteStatus local_status;
+  int r = get_local_mirror_image_site_status(&local_status);
+  if (r >= 0) {
+    local_status.dump(f);
+  }
+
+  f->open_array_section("remotes");
+  for (auto& status : mirror_image_site_statuses) {
+    if (status.fsid == MirrorImageSiteStatus::LOCAL_FSID) {
+      continue;
+    }
+
+    f->open_object_section("remote");
+    status.dump(f);
+    f->close_section();
+  }
+  f->close_section();
+}
+
+bool MirrorImageStatus::operator==(const MirrorImageStatus &rhs) const {
+  return (mirror_image_site_statuses == rhs.mirror_image_site_statuses);
+}
+
+void MirrorImageStatus::generate_test_instances(
+    std::list<MirrorImageStatus*> &o) {
+  o.push_back(new MirrorImageStatus());
+  o.push_back(new MirrorImageStatus({{"", MIRROR_IMAGE_STATUS_STATE_ERROR, ""}}));
+  o.push_back(new MirrorImageStatus({{"", MIRROR_IMAGE_STATUS_STATE_STOPPED, ""},
+                                     {"siteA", MIRROR_IMAGE_STATUS_STATE_REPLAYING, ""}}));
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorImageStatus& status) {
+  os << "{";
+  MirrorImageSiteStatus local_status;
+  int r = status.get_local_mirror_image_site_status(&local_status);
+  if (r >= 0) {
+    os << "state=" << local_status.state_to_string() << ", "
+       << "description=" << local_status.description << ", "
+       << "last_update=" << local_status.last_update << ", ";
+  }
+
+  os << "remotes=[";
+  for (auto& remote_status : status.mirror_image_site_statuses) {
+    if (remote_status.fsid == MirrorImageSiteStatus::LOCAL_FSID) {
+      continue;
+    }
+
+    os << "{"
+       << "fsid=" << remote_status.fsid << ", "
+       << "state=" << remote_status.state_to_string() << ", "
+       << "description=" << remote_status.description << ", "
+       << "last_update=" << remote_status.last_update
+       << "}";
+  }
+  os << "]}";
+  return os;
+}
+
+void ParentImageSpec::encode(bufferlist& bl) const {
   ENCODE_START(1, 1, bl);
   encode(pool_id, bl);
+  encode(pool_namespace, bl);
   encode(image_id, bl);
+  encode(snap_id, bl);
+  ENCODE_FINISH(bl);
+}
+
+void ParentImageSpec::decode(bufferlist::const_iterator& bl) {
+  DECODE_START(1, bl);
+  decode(pool_id, bl);
+  decode(pool_namespace, bl);
+  decode(image_id, bl);
+  decode(snap_id, bl);
+  DECODE_FINISH(bl);
+}
+
+void ParentImageSpec::dump(Formatter *f) const {
+  f->dump_int("pool_id", pool_id);
+  f->dump_string("pool_namespace", pool_namespace);
+  f->dump_string("image_id", image_id);
+  f->dump_unsigned("snap_id", snap_id);
+}
+
+void ParentImageSpec::generate_test_instances(std::list<ParentImageSpec*>& o) {
+  o.push_back(new ParentImageSpec{});
+  o.push_back(new ParentImageSpec{1, "", "foo", 3});
+  o.push_back(new ParentImageSpec{1, "ns", "foo", 3});
+}
+
+void ChildImageSpec::encode(bufferlist &bl) const {
+  ENCODE_START(2, 1, bl);
+  encode(pool_id, bl);
+  encode(image_id, bl);
+  encode(pool_namespace, bl);
   ENCODE_FINISH(bl);
 }
 
 void ChildImageSpec::decode(bufferlist::const_iterator &it) {
-  DECODE_START(1, it);
+  DECODE_START(2, it);
   decode(pool_id, it);
   decode(image_id, it);
+  if (struct_v >= 2) {
+    decode(pool_namespace, it);
+  }
   DECODE_FINISH(it);
 }
 
 void ChildImageSpec::dump(Formatter *f) const {
   f->dump_int("pool_id", pool_id);
+  f->dump_string("pool_namespace", pool_namespace);
   f->dump_string("image_id", image_id);
 }
 
 void ChildImageSpec::generate_test_instances(std::list<ChildImageSpec*> &o) {
   o.push_back(new ChildImageSpec());
-  o.push_back(new ChildImageSpec(123, "abc"));
+  o.push_back(new ChildImageSpec(123, "", "abc"));
+  o.push_back(new ChildImageSpec(123, "ns", "abc"));
 }
 
 void GroupImageSpec::encode(bufferlist &bl) const {
@@ -400,6 +718,50 @@ void TrashSnapshotNamespace::dump(Formatter *f) const {
     << original_snapshot_namespace_type;
 }
 
+void MirrorPrimarySnapshotNamespace::encode(bufferlist& bl) const {
+  using ceph::encode;
+  encode(demoted, bl);
+  encode(mirror_peer_uuids, bl);
+}
+
+void MirrorPrimarySnapshotNamespace::decode(bufferlist::const_iterator& it) {
+  using ceph::decode;
+  decode(demoted, it);
+  decode(mirror_peer_uuids, it);
+}
+
+void MirrorPrimarySnapshotNamespace::dump(Formatter *f) const {
+  f->dump_bool("demoted", demoted);
+  f->open_array_section("mirror_peer_uuids");
+  for (auto &peer : mirror_peer_uuids) {
+    f->dump_string("mirror_peer_uuid", peer);
+  }
+  f->close_section();
+}
+
+void MirrorNonPrimarySnapshotNamespace::encode(bufferlist& bl) const {
+  using ceph::encode;
+  encode(primary_mirror_uuid, bl);
+  encode(primary_snap_id, bl);
+  encode(copied, bl);
+  encode(last_copied_object_number, bl);
+}
+
+void MirrorNonPrimarySnapshotNamespace::decode(bufferlist::const_iterator& it) {
+  using ceph::decode;
+  decode(primary_mirror_uuid, it);
+  decode(primary_snap_id, it);
+  decode(copied, it);
+  decode(last_copied_object_number, it);
+}
+
+void MirrorNonPrimarySnapshotNamespace::dump(Formatter *f) const {
+  f->dump_string("primary_mirror_uuid", primary_mirror_uuid);
+  f->dump_unsigned("primary_snap_id", primary_snap_id);
+  f->dump_bool("copied", copied);
+  f->dump_unsigned("last_copied_object_number", last_copied_object_number);
+}
+
 class EncodeSnapshotNamespaceVisitor : public boost::static_visitor<void> {
 public:
   explicit EncodeSnapshotNamespaceVisitor(bufferlist &bl) : m_bl(bl) {
@@ -503,6 +865,12 @@ void SnapshotInfo::generate_test_instances(std::list<SnapshotInfo*> &o) {
                                TrashSnapshotNamespace{
                                  SNAPSHOT_NAMESPACE_TYPE_USER, "snap1"},
                                "12345", 123, {123456, 0}, 429));
+  o.push_back(new SnapshotInfo(1ULL,
+                               MirrorPrimarySnapshotNamespace{true, {"1", "2"}},
+                               "snap1", 123, {123456, 0}, 12));
+  o.push_back(new SnapshotInfo(1ULL,
+                               MirrorNonPrimarySnapshotNamespace{"uuid", 111},
+                               "snap1", 123, {123456, 0}, 12));
 }
 
 void SnapshotNamespace::encode(bufferlist& bl) const {
@@ -526,6 +894,12 @@ void SnapshotNamespace::decode(bufferlist::const_iterator &p)
     case cls::rbd::SNAPSHOT_NAMESPACE_TYPE_TRASH:
       *this = TrashSnapshotNamespace();
       break;
+    case cls::rbd::SNAPSHOT_NAMESPACE_TYPE_MIRROR_PRIMARY:
+      *this = MirrorPrimarySnapshotNamespace();
+      break;
+    case cls::rbd::SNAPSHOT_NAMESPACE_TYPE_MIRROR_NON_PRIMARY:
+      *this = MirrorNonPrimarySnapshotNamespace();
+      break;
     default:
       *this = UnknownSnapshotNamespace();
       break;
@@ -546,6 +920,9 @@ void SnapshotNamespace::generate_test_instances(std::list<SnapshotNamespace*> &o
   o.push_back(new SnapshotNamespace(GroupSnapshotNamespace(5, "1018643c9869",
                                                            "33352be8933c")));
   o.push_back(new SnapshotNamespace(TrashSnapshotNamespace()));
+  o.push_back(new SnapshotNamespace(MirrorPrimarySnapshotNamespace(true,
+                                                                   {"uuid"})));
+  o.push_back(new SnapshotNamespace(MirrorNonPrimarySnapshotNamespace("", 0)));
 }
 
 std::ostream& operator<<(std::ostream& os, const SnapshotNamespaceType& type) {
@@ -558,6 +935,12 @@ std::ostream& operator<<(std::ostream& os, const SnapshotNamespaceType& type) {
     break;
   case SNAPSHOT_NAMESPACE_TYPE_TRASH:
     os << "trash";
+    break;
+  case SNAPSHOT_NAMESPACE_TYPE_MIRROR_PRIMARY:
+    os << "mirror_primary";
+    break;
+  case SNAPSHOT_NAMESPACE_TYPE_MIRROR_NON_PRIMARY:
+    os << "mirror_non_primary";
     break;
   default:
     os << "unknown";
@@ -583,6 +966,26 @@ std::ostream& operator<<(std::ostream& os, const TrashSnapshotNamespace& ns) {
   os << "[" << SNAPSHOT_NAMESPACE_TYPE_TRASH << " "
      << "original_name=" << ns.original_name << ", "
      << "original_snapshot_namespace=" << ns.original_snapshot_namespace_type
+     << "]";
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorPrimarySnapshotNamespace& ns) {
+  os << "[" << SNAPSHOT_NAMESPACE_TYPE_MIRROR_PRIMARY << " "
+     << "demoted=" << ns.demoted << ", "
+     << "mirror_peer_uuids=" << ns.mirror_peer_uuids
+     << "]";
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MirrorNonPrimarySnapshotNamespace& ns) {
+  os << "[" << SNAPSHOT_NAMESPACE_TYPE_MIRROR_NON_PRIMARY << " "
+     << "primary_mirror_uuid=" << ns.primary_mirror_uuid << ", "
+     << "primary_snap_id=" << ns.primary_snap_id << ", "
+     << "copied=" << ns.copied << ", "
+     << "last_copied_object_number=" << ns.last_copied_object_number
      << "]";
   return os;
 }
@@ -652,31 +1055,29 @@ void GroupSnapshot::generate_test_instances(std::list<GroupSnapshot *> &o) {
   o.push_back(new GroupSnapshot("1018643c9869", "groupsnapshot2", GROUP_SNAPSHOT_STATE_COMPLETE));
 }
 void TrashImageSpec::encode(bufferlist& bl) const {
-  ENCODE_START(1, 1, bl);
+  ENCODE_START(2, 1, bl);
   encode(source, bl);
   encode(name, bl);
   encode(deletion_time, bl);
   encode(deferment_end_time, bl);
+  encode(state, bl);
   ENCODE_FINISH(bl);
 }
 
 void TrashImageSpec::decode(bufferlist::const_iterator &it) {
-  DECODE_START(1, it);
+  DECODE_START(2, it);
   decode(source, it);
   decode(name, it);
   decode(deletion_time, it);
   decode(deferment_end_time, it);
+  if (struct_v >= 2) {
+    decode(state, it);
+  }
   DECODE_FINISH(it);
 }
 
 void TrashImageSpec::dump(Formatter *f) const {
-  switch(source) {
-    case TRASH_IMAGE_SOURCE_USER:
-      f->dump_string("source", "user");
-      break;
-    case TRASH_IMAGE_SOURCE_MIRRORING:
-      f->dump_string("source", "rbd_mirror");
-  }
+  f->dump_stream("source") << source;
   f->dump_string("name", name);
   f->dump_unsigned("deletion_time", deletion_time);
   f->dump_unsigned("deferment_end_time", deferment_end_time);
@@ -730,6 +1131,157 @@ std::ostream& operator<<(std::ostream& os,
                          const MirrorImageMap &image_map) {
   return os << "[" << "instance_id=" << image_map.instance_id << ", mapped_time="
             << image_map.mapped_time << "]";
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MigrationHeaderType& type) {
+  switch (type) {
+  case MIGRATION_HEADER_TYPE_SRC:
+    os << "source";
+    break;
+  case MIGRATION_HEADER_TYPE_DST:
+    os << "destination";
+    break;
+  default:
+    os << "unknown (" << static_cast<uint32_t>(type) << ")";
+    break;
+  }
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MigrationState& migration_state) {
+  switch (migration_state) {
+  case MIGRATION_STATE_ERROR:
+    os << "error";
+    break;
+  case MIGRATION_STATE_PREPARING:
+    os << "preparing";
+    break;
+  case MIGRATION_STATE_PREPARED:
+    os << "prepared";
+    break;
+  case MIGRATION_STATE_EXECUTING:
+    os << "executing";
+    break;
+  case MIGRATION_STATE_EXECUTED:
+    os << "executed";
+    break;
+  default:
+    os << "unknown (" << static_cast<uint32_t>(migration_state) << ")";
+    break;
+  }
+  return os;
+}
+
+void MigrationSpec::encode(bufferlist& bl) const {
+  ENCODE_START(2, 1, bl);
+  encode(header_type, bl);
+  encode(pool_id, bl);
+  encode(pool_namespace, bl);
+  encode(image_name, bl);
+  encode(image_id, bl);
+  encode(snap_seqs, bl);
+  encode(overlap, bl);
+  encode(flatten, bl);
+  encode(mirroring, bl);
+  encode(state, bl);
+  encode(state_description, bl);
+  encode(static_cast<uint8_t>(mirror_image_mode), bl);
+  ENCODE_FINISH(bl);
+}
+
+void MigrationSpec::decode(bufferlist::const_iterator& bl) {
+  DECODE_START(2, bl);
+  decode(header_type, bl);
+  decode(pool_id, bl);
+  decode(pool_namespace, bl);
+  decode(image_name, bl);
+  decode(image_id, bl);
+  decode(snap_seqs, bl);
+  decode(overlap, bl);
+  decode(flatten, bl);
+  decode(mirroring, bl);
+  decode(state, bl);
+  decode(state_description, bl);
+  if (struct_v >= 2) {
+    uint8_t int_mode;
+    decode(int_mode, bl);
+    mirror_image_mode = static_cast<MirrorImageMode>(int_mode);
+  }
+ DECODE_FINISH(bl);
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const std::map<uint64_t, uint64_t>& snap_seqs) {
+  os << "{";
+  size_t count = 0;
+  for (auto &it : snap_seqs) {
+    os << (count++ > 0 ? ", " : "") << "(" << it.first << ", " << it.second
+       << ")";
+  }
+  os << "}";
+  return os;
+}
+
+void MigrationSpec::dump(Formatter *f) const {
+  f->dump_stream("header_type") << header_type;
+  f->dump_int("pool_id", pool_id);
+  f->dump_string("pool_namespace", pool_namespace);
+  f->dump_string("image_name", image_name);
+  f->dump_string("image_id", image_id);
+  f->dump_stream("snap_seqs") << snap_seqs;
+  f->dump_unsigned("overlap", overlap);
+  f->dump_bool("mirroring", mirroring);
+  f->dump_stream("mirror_image_mode") << mirror_image_mode;
+}
+
+void MigrationSpec::generate_test_instances(std::list<MigrationSpec*> &o) {
+  o.push_back(new MigrationSpec());
+  o.push_back(new MigrationSpec(MIGRATION_HEADER_TYPE_SRC, 1, "ns",
+                                "image_name", "image_id", {{1, 2}}, 123, true,
+                                MIRROR_IMAGE_MODE_SNAPSHOT, true,
+                                MIGRATION_STATE_PREPARED, "description"));
+}
+
+std::ostream& operator<<(std::ostream& os,
+                         const MigrationSpec& migration_spec) {
+  os << "["
+     << "header_type=" << migration_spec.header_type << ", "
+     << "pool_id=" << migration_spec.pool_id << ", "
+     << "pool_namespace=" << migration_spec.pool_namespace << ", "
+     << "image_name=" << migration_spec.image_name << ", "
+     << "image_id=" << migration_spec.image_id << ", "
+     << "snap_seqs=" << migration_spec.snap_seqs << ", "
+     << "overlap=" << migration_spec.overlap << ", "
+     << "flatten=" << migration_spec.flatten << ", "
+     << "mirroring=" << migration_spec.mirroring << ", "
+     << "mirror_image_mode=" << migration_spec.mirror_image_mode << ", "
+     << "state=" << migration_spec.state << ", "
+     << "state_description=" << migration_spec.state_description << "]";
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const AssertSnapcSeqState& state) {
+  switch (state) {
+  case ASSERT_SNAPC_SEQ_GT_SNAPSET_SEQ:
+    os << "gt";
+    break;
+  case ASSERT_SNAPC_SEQ_LE_SNAPSET_SEQ:
+    os << "le";
+    break;
+  default:
+    os << "unknown (" << static_cast<uint32_t>(state) << ")";
+    break;
+  }
+  return os;
+}
+
+void sanitize_entity_inst(entity_inst_t* entity_inst) {
+  // make all addrs of type ANY because the type isn't what uniquely
+  // identifies them and clients and on-disk formats can be encoded
+  // with different backwards compatibility settings.
+  entity_inst->addr.set_type(entity_addr_t::TYPE_ANY);
 }
 
 } // namespace rbd

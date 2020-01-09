@@ -11,7 +11,9 @@ import inspect
 import tempfile
 import threading
 import traceback
+import six
 import socket
+import fcntl
 
 from . import common
 from . import context
@@ -20,16 +22,11 @@ from uuid import uuid4
 from pecan import jsonify, make_app
 from OpenSSL import crypto
 from pecan.rest import RestController
+from six import iteritems
 from werkzeug.serving import make_server, make_ssl_devcert
 
 from .hooks import ErrorHook
 from mgr_module import MgrModule, CommandResult
-
-
-try:
-    iteritems = dict.iteritems
-except:
-    iteritems = dict.items
 
 
 class CannotServe(Exception):
@@ -83,16 +80,16 @@ class CommandsRequest(object):
 
         # Gather the results (in parallel)
         results = []
-        for index in range(len(commands)):
-            tag = '%s:%d' % (str(self.id), index)
+        for index, command in enumerate(commands):
+            tag = '%s:%s:%d' % (__name__, self.id, index)
 
             # Store the result
             result = CommandResult(tag)
-            result.command = common.humanify_command(commands[index])
+            result.command = common.humanify_command(command)
             results.append(result)
 
             # Run the command
-            context.instance.send_command(result, 'mon', '', json.dumps(commands[index]), tag)
+            context.instance.send_command(result, 'mon', '', json.dumps(command), tag)
 
         return results
 
@@ -163,37 +160,31 @@ class CommandsRequest(object):
     def __json__(self):
         return {
             'id': self.id,
-            'running': map(
-                lambda x: {
+            'running': [
+                {
                     'command': x.command,
                     'outs': x.outs,
                     'outb': x.outb,
-                },
-                self.running
-            ),
-            'finished': map(
-                lambda x: {
+                } for x in self.running
+            ],
+            'finished': [
+                {
                     'command': x.command,
                     'outs': x.outs,
                     'outb': x.outb,
-                },
-                self.finished
-            ),
-            'waiting': map(
-                lambda x: map(
-                    lambda y: common.humanify_command(y),
-                    x
-                ),
-                self.waiting
-            ),
-            'failed': map(
-                lambda x: {
+                } for x in self.finished
+            ],
+            'waiting': [
+                [common.humanify_command(y) for y in x]
+                for x in self.waiting
+            ],
+            'failed': [
+                {
                     'command': x.command,
                     'outs': x.outs,
                     'outb': x.outb,
-                },
-                self.failed
-            ),
+                } for x in self.failed
+            ],
             'is_waiting': self.is_waiting(),
             'is_finished': self.is_finished(),
             'has_failed': self.has_failed(),
@@ -203,7 +194,7 @@ class CommandsRequest(object):
 
 
 class Module(MgrModule):
-    OPTIONS = [
+    MODULE_OPTIONS = [
         {'name': 'server_addr'},
         {'name': 'server_port'},
         {'name': 'key_file'},
@@ -223,7 +214,7 @@ class Module(MgrModule):
         {
             "cmd": "restful list-keys",
             "desc": "List all API keys",
-            "perm": "rw"
+            "perm": "r"
         },
         {
             "cmd": "restful create-self-signed-cert",
@@ -254,6 +245,7 @@ class Module(MgrModule):
 
 
     def serve(self):
+        self.log.debug('serve enter')
         while not self.stop_server:
             try:
                 self._serve()
@@ -266,11 +258,12 @@ class Module(MgrModule):
             # Wait and clear the threading event
             self.serve_event.wait()
             self.serve_event.clear()
+        self.log.debug('serve exit')
 
     def refresh_keys(self):
         self.keys = {}
         rawkeys = self.get_store_prefix('keys/') or {}
-        for k, v in iteritems(rawkeys):
+        for k, v in six.iteritems(rawkeys):
             self.keys[k[5:]] = v  # strip of keys/ prefix
 
     def _serve(self):
@@ -283,11 +276,11 @@ class Module(MgrModule):
             separators=(',', ': '),
         )
 
-        server_addr = self.get_localized_config('server_addr', '::')
+        server_addr = self.get_localized_module_option('server_addr', '::')
         if server_addr is None:
             raise CannotServe('no server_addr configured; try "ceph config-key set mgr/restful/server_addr <ip>"')
 
-        server_port = int(self.get_localized_config('server_port', '8003'))
+        server_port = int(self.get_localized_module_option('server_port', '8003'))
         self.log.info('server_addr: %s server_port: %d',
                       server_addr, server_port)
 
@@ -307,7 +300,7 @@ class Module(MgrModule):
             pkey_tmp.flush()
             pkey_fname = pkey_tmp.name
         else:
-            pkey_fname = self.get_localized_config('key_file')
+            pkey_fname = self.get_localized_module_option('key_file')
 
         if not cert_fname or not pkey_fname:
             raise CannotServe('no certificate configured')
@@ -333,19 +326,30 @@ class Module(MgrModule):
             ),
             ssl_context=(cert_fname, pkey_fname),
         )
-
-        self.server.serve_forever()
+        sock_fd_flag = fcntl.fcntl(self.server.socket.fileno(), fcntl.F_GETFD)
+        if not (sock_fd_flag & fcntl.FD_CLOEXEC):
+            self.log.debug("set server socket close-on-exec")
+            fcntl.fcntl(self.server.socket.fileno(), fcntl.F_SETFD, sock_fd_flag | fcntl.FD_CLOEXEC)
+        if self.stop_server:
+            self.log.debug('made server, but stop flag set')
+        else:
+            self.log.debug('made server, serving forever')
+            self.server.serve_forever()
 
 
     def shutdown(self):
+        self.log.debug('shutdown enter')
         try:
             self.stop_server = True
             if self.server:
+                self.log.debug('calling server.shutdown')
                 self.server.shutdown()
+                self.log.debug('called server.shutdown')
             self.serve_event.set()
         except:
             self.log.error(str(traceback.format_exc()))
             raise
+        self.log.debug('shutdown exit')
 
 
     def restart(self):
@@ -365,22 +369,21 @@ class Module(MgrModule):
 
 
     def _notify(self, notify_type, tag):
-        if notify_type == "command":
-            # we can safely skip all the sequential commands
-            if tag == 'seq':
-                return
-
-            request = [x for x in self.requests if x.is_running(tag)]
-            if len(request) != 1:
-                self.log.warn("Unknown request '%s'" % str(tag))
-                return
-
-            request = request[0]
+        if notify_type != "command":
+            self.log.debug("Unhandled notification type '%s'", notify_type)
+            return
+        # we can safely skip all the sequential commands
+        if tag == 'seq':
+            return
+        try:
+            with self.requests_lock:
+                request = next(x for x in self.requests if x.is_running(tag))
             request.finish(tag)
             if request.is_ready():
                 request.next()
-        else:
-            self.log.debug("Unhandled notification type '%s'" % notify_type)
+        except StopIteration:
+            # the command was not issued by me
+            pass
 
 
     def create_self_signed_cert(self):
@@ -437,7 +440,7 @@ class Module(MgrModule):
             self.refresh_keys()
             return (
                 0,
-                json.dumps(self.keys, indent=2),
+                json.dumps(self.keys, indent=4, sort_keys=True),
                 "",
             )
 
@@ -509,14 +512,15 @@ class Module(MgrModule):
     def get_osd_pools(self):
         osds = dict(map(lambda x: (x['osd'], []), self.get('osd_map')['osds']))
         pools = dict(map(lambda x: (x['pool'], x), self.get('osd_map')['pools']))
-        crush_rules = self.get('osd_map_crush')['rules']
+        crush = self.get('osd_map_crush')
+        crush_rules = crush['rules']
 
         osds_by_pool = {}
         for pool_id, pool in pools.items():
             pool_osds = None
             for rule in [r for r in crush_rules if r['rule_id'] == pool['crush_rule']]:
                 if rule['min_size'] <= pool['size'] <= rule['max_size']:
-                    pool_osds = common.crush_rule_osds(self.get('osd_map_tree')['nodes'], rule)
+                    pool_osds = common.crush_rule_osds(crush['buckets'], rule)
 
             osds_by_pool[pool_id] = pool_osds
 
@@ -589,8 +593,8 @@ class Module(MgrModule):
 
 
     def submit_request(self, _request, **kwargs):
-        request = CommandsRequest(_request)
         with self.requests_lock:
+            request = CommandsRequest(_request)
             self.requests.append(request)
         if kwargs.get('wait', 0):
             while not request.is_finished():
@@ -599,7 +603,7 @@ class Module(MgrModule):
 
 
     def run_command(self, command):
-        # tag with 'seq' so that we can ingore these in notify function
+        # tag with 'seq' so that we can ignore these in notify function
         result = CommandResult('seq')
 
         self.send_command(result, 'mon', '', json.dumps(command), 'seq')

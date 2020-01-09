@@ -1,10 +1,11 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { FormControl, ReactiveFormsModule } from '@angular/forms';
+import { RouterTestingModule } from '@angular/router/testing';
 
 import { BsModalRef } from 'ngx-bootstrap/modal';
 
+import { configureTestBed, i18nProviders } from '../../../../testing/unit-test-helper';
 import { SharedModule } from '../../../shared/shared.module';
-import { configureTestBed } from '../../../shared/unit-test-helper';
 import { RgwUserSubuserModalComponent } from './rgw-user-subuser-modal.component';
 
 describe('RgwUserSubuserModalComponent', () => {
@@ -12,12 +13,9 @@ describe('RgwUserSubuserModalComponent', () => {
   let fixture: ComponentFixture<RgwUserSubuserModalComponent>;
 
   configureTestBed({
-    declarations: [ RgwUserSubuserModalComponent ],
-    imports: [
-      ReactiveFormsModule,
-      SharedModule
-    ],
-    providers: [ BsModalRef ]
+    declarations: [RgwUserSubuserModalComponent],
+    imports: [ReactiveFormsModule, SharedModule, RouterTestingModule],
+    providers: [BsModalRef, i18nProviders]
   });
 
   beforeEach(() => {

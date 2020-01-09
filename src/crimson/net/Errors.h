@@ -16,10 +16,11 @@
 
 #include <system_error>
 
-namespace ceph::net {
+namespace crimson::net {
 
 /// net error codes
 enum class error {
+  success = 0,
   bad_connect_banner,
   bad_peer_address,
   negotiation_failure,
@@ -27,6 +28,11 @@ enum class error {
   connection_aborted,
   connection_refused,
   connection_reset,
+  corrupted_message,
+  invalid_argument,
+  address_in_use,
+  broken_pipe,
+  protocol_aborted,
 };
 
 /// net error category
@@ -42,12 +48,12 @@ inline std::error_condition make_error_condition(error e)
   return {static_cast<int>(e), net_category()};
 }
 
-} // namespace ceph::net
+} // namespace crimson::net
 
 namespace std {
 
 /// enables implicit conversion to std::error_condition
 template <>
-struct is_error_condition_enum<ceph::net::error> : public true_type {};
+struct is_error_condition_enum<crimson::net::error> : public true_type {};
 
 } // namespace std

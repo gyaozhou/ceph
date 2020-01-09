@@ -28,7 +28,7 @@
 
 #include "include/unordered_map.h"
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 #include "os/ObjectStore.h"
 #include "JournalingObjectStore.h"
@@ -38,7 +38,7 @@
 #include "common/perf_counters.h"
 #include "common/zipkin_trace.h"
 
-#include "common/Mutex.h"
+#include "common/ceph_mutex.h"
 #include "HashIndex.h"
 #include "IndexManager.h"
 #include "os/ObjectMap.h"
@@ -160,6 +160,8 @@ private:
 
   void create_backend(unsigned long f_type);
 
+  string devname;
+
   int vdo_fd = -1;
   string vdo_name;
 
@@ -177,6 +179,8 @@ private:
   }
   void init_temp_collections();
 
+  void handle_eio();
+
   // ObjectMap
   boost::scoped_ptr<ObjectMap> object_map;
 
@@ -190,11 +194,11 @@ private:
   int lock_fsid();
 
   // sync thread
-  Mutex lock;
+  ceph::mutex lock = ceph::make_mutex("FileStore::lock");
   bool force_sync;
-  Cond sync_cond;
+  ceph::condition_variable sync_cond;
 
-  Mutex sync_entry_timeo_lock;
+  ceph::mutex sync_entry_timeo_lock = ceph::make_mutex("FileStore::sync_entry_timeo_lock");
   SafeTimer timer;
 
   list<Context*> sync_waiters;
@@ -222,16 +226,20 @@ private:
   };
   class OpSequencer : public CollectionImpl {
     CephContext *cct;
-    Mutex qlock; // to protect q, for benefit of flush (peek/dequeue also protected by lock)
+    // to protect q, for benefit of flush (peek/dequeue also protected by lock)
+    ceph::mutex qlock =
+      ceph::make_mutex("FileStore::OpSequencer::qlock", false);
     list<Op*> q;
     list<uint64_t> jq;
     list<pair<uint64_t, Context*> > flush_commit_waiters;
-    Cond cond;
+    ceph::condition_variable cond;
     string osr_name_str;
     /// hash of pointers to ghobject_t's for in-flight writes
     unordered_multimap<uint32_t,const ghobject_t*> applying;
   public:
-    Mutex apply_lock;  // for apply mutual exclusion
+    // for apply mutual exclusion
+    ceph::mutex apply_lock =
+      ceph::make_mutex("FileStore::OpSequencer::apply_lock", false);
     int id;
     const char *osr_name;
 
@@ -239,8 +247,7 @@ private:
     bool _get_max_uncompleted(
       uint64_t *seq ///< [out] max uncompleted seq
       ) {
-      assert(qlock.is_locked());
-      assert(seq);
+      ceph_assert(seq);
       *seq = 0;
       if (q.empty() && jq.empty())
 	return true;
@@ -257,8 +264,7 @@ private:
     bool _get_min_uncompleted(
       uint64_t *seq ///< [out] min uncompleted seq
       ) {
-      assert(qlock.is_locked());
-      assert(seq);
+      ceph_assert(seq);
       *seq = 0;
       if (q.empty() && jq.empty())
 	return true;
@@ -285,18 +291,18 @@ private:
     }
 
     void queue_journal(Op *o) {
-      Mutex::Locker l(qlock);
+      std::lock_guard l{qlock};
       jq.push_back(o->op);
       _register_apply(o);
     }
     void dequeue_journal(list<Context*> *to_queue) {
-      Mutex::Locker l(qlock);
+      std::lock_guard l{qlock};
       jq.pop_front();
-      cond.Signal();
+      cond.notify_all();
       _wake_flush_waiters(to_queue);
     }
     void queue(Op *o) {
-      Mutex::Locker l(qlock);
+      std::lock_guard l{qlock};
       q.push_back(o);
       _register_apply(o);
       o->trace.keyval("queue depth", q.size());
@@ -305,29 +311,27 @@ private:
     void _unregister_apply(Op *o);
     void wait_for_apply(const ghobject_t& oid);
     Op *peek_queue() {
-      Mutex::Locker l(qlock);
-      assert(apply_lock.is_locked());
+      std::lock_guard l{qlock};
+      ceph_assert(ceph_mutex_is_locked(apply_lock));
       return q.front();
     }
 
     Op *dequeue(list<Context*> *to_queue) {
-      assert(to_queue);
-      assert(apply_lock.is_locked());
-      Mutex::Locker l(qlock);
+      ceph_assert(to_queue);
+      ceph_assert(ceph_mutex_is_locked(apply_lock));
+      std::lock_guard l{qlock};
       Op *o = q.front();
       q.pop_front();
-      cond.Signal();
+      cond.notify_all();
       _unregister_apply(o);
       _wake_flush_waiters(to_queue);
       return o;
     }
 
     void flush() override {
-      Mutex::Locker l(qlock);
-
-      while (cct->_conf->filestore_blackhole)
-	cond.Wait(qlock);  // wait forever
-
+      std::unique_lock l{qlock};
+      // wait forever
+      cond.wait(l, [this] { return !cct->_conf->filestore_blackhole; });
 
       // get max for journal _or_ op queues
       uint64_t seq = 0;
@@ -338,13 +342,14 @@ private:
 
       if (seq) {
 	// everything prior to our watermark to drain through either/both queues
-	while ((!q.empty() && q.front()->op <= seq) ||
-	       (!jq.empty() && jq.front() <= seq))
-	  cond.Wait(qlock);
+	cond.wait(l, [seq, this] {
+          return ((q.empty() || q.front()->op > seq) &&
+		  (jq.empty() || jq.front() > seq));
+        });
       }
     }
     bool flush_commit(Context *c) override {
-      Mutex::Locker l(qlock);
+      std::lock_guard l{qlock};
       uint64_t seq = 0;
       if (_get_max_uncompleted(&seq)) {
 	return true;
@@ -354,21 +359,21 @@ private:
       }
     }
 
+  private:
+    FRIEND_MAKE_REF(OpSequencer);
     OpSequencer(CephContext* cct, int i, coll_t cid)
-      : CollectionImpl(cid),
+      : CollectionImpl(cct, cid),
 	cct(cct),
-	qlock("FileStore::OpSequencer::qlock", false, false),
 	osr_name_str(stringify(cid)),
-	apply_lock("FileStore::OpSequencer::apply_lock", false, false),
         id(i),
 	osr_name(osr_name_str.c_str()) {}
     ~OpSequencer() override {
-      assert(q.empty());
+      ceph_assert(q.empty());
     }
   };
   typedef boost::intrusive_ptr<OpSequencer> OpSequencerRef;
 
-  Mutex coll_lock;
+  ceph::mutex coll_lock = ceph::make_mutex("FileStore::coll_lock");
   map<coll_t,OpSequencerRef> coll_map;
 
   friend ostream& operator<<(ostream& out, const OpSequencer& s);
@@ -415,7 +420,7 @@ private:
       store->_finish_op(osr);
     }
     void _clear() override {
-      assert(store->op_queue.empty());
+      ceph_assert(store->op_queue.empty());
     }
   } op_wq;
 
@@ -504,6 +509,7 @@ public:
     f->close_section();
   }
 
+  int flush_cache(ostream *os = NULL) override;
   int write_version_stamp();
   int version_stamp_is_valid(uint32_t *version);
   int update_version_stamp();
@@ -516,7 +522,10 @@ public:
   void collect_metadata(map<string,string> *pm) override;
   int get_devices(set<string> *ls) override;
 
-  int statfs(struct store_statfs_t *buf) override;
+  int statfs(struct store_statfs_t *buf,
+             osd_alert_list_t* alerts = nullptr) override;
+  int pool_statfs(uint64_t pool_id, struct store_statfs_t *buf,
+		  bool *per_pool_omap) override;
 
   int _do_transactions(
     vector<Transaction> &tls, uint64_t op_seq,
@@ -531,6 +540,9 @@ public:
 
   CollectionHandle open_collection(const coll_t& c) override;
   CollectionHandle create_new_collection(const coll_t& c) override;
+  void set_collection_commit_queue(const coll_t& cid,
+				   ContextQueue *commit_queue) override {
+  }
 
   int queue_transactions(CollectionHandle& ch, vector<Transaction>& tls,
 			 TrackedOpRef op = TrackedOpRef(),
@@ -651,14 +663,14 @@ public:
   uint64_t estimate_objects_overhead(uint64_t num_objects) override;
 
   // DEBUG read error injection, an object is removed from both on delete()
-  Mutex read_error_lock;
+  ceph::mutex read_error_lock = ceph::make_mutex("FileStore::read_error_lock");
   set<ghobject_t> data_error_set; // read() will return -EIO
   set<ghobject_t> mdata_error_set; // getattr(),stat() will return -EIO
   void inject_data_error(const ghobject_t &oid) override;
   void inject_mdata_error(const ghobject_t &oid) override;
 
   void compact() override {
-    assert(object_map);
+    ceph_assert(object_map);
     object_map->compact();
   }
 
@@ -767,6 +779,8 @@ public:
 
   virtual int apply_layout_settings(const coll_t &cid, int target_level);
 
+  void get_db_statistics(Formatter* f) override;
+
 private:
   void _inject_failure();
 
@@ -785,12 +799,11 @@ private:
 		      const SequencerPosition &spos);
   int _split_collection(const coll_t& cid, uint32_t bits, uint32_t rem, coll_t dest,
                         const SequencerPosition &spos);
-  int _split_collection_create(const coll_t& cid, uint32_t bits, uint32_t rem,
-			       coll_t dest,
-			       const SequencerPosition &spos);
+  int _merge_collection(const coll_t& cid, uint32_t bits, coll_t dest,
+                        const SequencerPosition &spos);
 
   const char** get_tracked_conf_keys() const override;
-  void handle_conf_change(const struct md_config_t *conf,
+  void handle_conf_change(const ConfigProxy& conf,
                           const std::set <std::string> &changed) override;
   int set_throttle_params();
   float m_filestore_commit_timeout;

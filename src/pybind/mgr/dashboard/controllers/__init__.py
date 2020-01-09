@@ -6,34 +6,133 @@ import collections
 import importlib
 import inspect
 import json
+import logging
 import os
 import pkgutil
+import re
 import sys
-from six import add_metaclass
 
-if sys.version_info >= (3, 0):
-    from urllib.parse import unquote  # pylint: disable=no-name-in-module,import-error
-else:
-    from urllib import unquote  # pylint: disable=no-name-in-module
+import six
+from six.moves.urllib.parse import unquote
 
 # pylint: disable=wrong-import-position
 import cherrypy
 
-from .. import logger
 from ..security import Scope, Permission
-from ..settings import Settings
-from ..tools import Session, wraps, getargspec, TaskManager
-from ..exceptions import ViewCacheNoDataException, DashboardException, \
-                         ScopeNotValid, PermissionNotValid
-from ..services.exception import serialize_dashboard_exception
-from ..services.auth import AuthManager
+from ..tools import wraps, getargspec, TaskManager, get_request_body_params
+from ..exceptions import ScopeNotValid, PermissionNotValid
+from ..services.auth import AuthManager, JwtManager
+from ..plugins import PLUGIN_MANAGER
+
+
+def EndpointDoc(description="", group="", parameters=None, responses=None):  # noqa: N802
+    if not isinstance(description, str):
+        raise Exception("%s has been called with a description that is not a string: %s"
+                        % (EndpointDoc.__name__, description))
+    if not isinstance(group, str):
+        raise Exception("%s has been called with a groupname that is not a string: %s"
+                        % (EndpointDoc.__name__, group))
+    if parameters and not isinstance(parameters, dict):
+        raise Exception("%s has been called with parameters that is not a dict: %s"
+                        % (EndpointDoc.__name__, parameters))
+    if responses and not isinstance(responses, dict):
+        raise Exception("%s has been called with responses that is not a dict: %s"
+                        % (EndpointDoc.__name__, responses))
+
+    if not parameters:
+        parameters = {}
+
+    def _split_param(name, p_type, description, optional=False, default_value=None, nested=False):
+        param = {
+            'name': name,
+            'description': description,
+            'required': not optional,
+            'nested': nested,
+        }
+        if default_value:
+            param['default'] = default_value
+        if isinstance(p_type, type):
+            param['type'] = p_type
+        else:
+            nested_params = _split_parameters(p_type, nested=True)
+            if nested_params:
+                param['type'] = type(p_type)
+                param['nested_params'] = nested_params
+            else:
+                param['type'] = p_type
+        return param
+
+    #  Optional must be set to True in order to set default value and parameters format must be:
+    # 'name: (type or nested parameters, description, [optional], [default value])'
+    def _split_dict(data, nested):
+        splitted = []
+        for name, props in data.items():
+            if isinstance(name, str) and isinstance(props, tuple):
+                if len(props) == 2:
+                    param = _split_param(name, props[0], props[1], nested=nested)
+                elif len(props) == 3:
+                    param = _split_param(name, props[0], props[1], optional=props[2], nested=nested)
+                if len(props) == 4:
+                    param = _split_param(name, props[0], props[1], props[2], props[3], nested)
+                splitted.append(param)
+            else:
+                raise Exception(
+                    """Parameter %s in %s has not correct format. Valid formats are:
+                    <name>: (<type>, <description>, [optional], [default value])
+                    <name>: (<[type]>, <description>, [optional], [default value])
+                    <name>: (<[nested parameters]>, <description>, [optional], [default value])
+                    <name>: (<{nested parameters}>, <description>, [optional], [default value])"""
+                    % (name, EndpointDoc.__name__))
+        return splitted
+
+    def _split_list(data, nested):
+        splitted = []
+        for item in data:
+            splitted.extend(_split_parameters(item, nested))
+        return splitted
+
+    # nested = True means parameters are inside a dict or array
+    def _split_parameters(data, nested=False):
+        param_list = []
+        if isinstance(data, dict):
+            param_list.extend(_split_dict(data, nested))
+        elif isinstance(data, (list, tuple)):
+            param_list.extend(_split_list(data, True))
+        return param_list
+
+    resp = {}
+    if responses:
+        for status_code, response_body in responses.items():
+            resp[str(status_code)] = _split_parameters(response_body)
+
+    def _wrapper(func):
+        func.doc_info = {
+            'summary': description,
+            'tag': group,
+            'parameters': _split_parameters(parameters),
+            'response': resp
+        }
+        return func
+
+    return _wrapper
+
+
+class ControllerDoc(object):
+    def __init__(self, description="", group=""):
+        self.tag = group
+        self.tag_descr = description
+
+    def __call__(self, cls):
+        cls.doc_info = {
+            'tag': self.tag,
+            'tag_descr': self.tag_descr
+        }
+        return cls
 
 
 class Controller(object):
     def __init__(self, path, base_url=None, security_scope=None, secure=True):
         if security_scope and not Scope.valid_scope(security_scope):
-            logger.debug("Invalid security scope name: %s\n Possible values: "
-                         "%s", security_scope, Scope.all_scopes())
             raise ScopeNotValid(security_scope)
         self.path = path
         self.base_url = base_url
@@ -57,9 +156,6 @@ class Controller(object):
         cls._security_scope = self.security_scope
 
         config = {
-            'tools.sessions.on': True,
-            'tools.sessions.name': Session.NAME,
-            'tools.session_expire_at_browser_close.on': True,
             'tools.dashboard_exception_handler.on': True,
             'tools.authenticate.on': self.secure,
         }
@@ -88,8 +184,8 @@ class UiApiController(Controller):
                                               secure=secure)
 
 
-def Endpoint(method=None, path=None, path_params=None, query_params=None,
-             json_response=True, proxy=False):
+def Endpoint(method=None, path=None, path_params=None, query_params=None,  # noqa: N802
+             json_response=True, proxy=False, xml=False):
 
     if method is None:
         method = 'GET'
@@ -139,13 +235,14 @@ def Endpoint(method=None, path=None, path_params=None, query_params=None,
             'path_params': path_params,
             'query_params': query_params,
             'json_response': json_response,
-            'proxy': proxy
+            'proxy': proxy,
+            'xml': xml
         }
         return func
     return _wrapper
 
 
-def Proxy(path=None):
+def Proxy(path=None):  # noqa: N802
     if path is None:
         path = ""
     elif path == "/":
@@ -155,19 +252,20 @@ def Proxy(path=None):
 
 
 def load_controllers():
+    logger = logging.getLogger('controller.load')
     # setting sys.path properly when not running under the mgr
     controllers_dir = os.path.dirname(os.path.realpath(__file__))
     dashboard_dir = os.path.dirname(controllers_dir)
     mgr_dir = os.path.dirname(dashboard_dir)
-    logger.debug("LC: controllers_dir=%s", controllers_dir)
-    logger.debug("LC: dashboard_dir=%s", dashboard_dir)
-    logger.debug("LC: mgr_dir=%s", mgr_dir)
+    logger.debug("controllers_dir=%s", controllers_dir)
+    logger.debug("dashboard_dir=%s", dashboard_dir)
+    logger.debug("mgr_dir=%s", mgr_dir)
     if mgr_dir not in sys.path:
         sys.path.append(mgr_dir)
 
     controllers = []
     mods = [mod for _, mod, _ in pkgutil.iter_modules([controllers_dir])]
-    logger.debug("LC: mods=%s", mods)
+    logger.debug("mods=%s", mods)
     for mod_name in mods:
         mod = importlib.import_module('.controllers.{}'.format(mod_name),
                                       package='dashboard')
@@ -182,6 +280,9 @@ def load_controllers():
                     continue
                 controllers.append(cls)
 
+    for clist in PLUGIN_MANAGER.hook.get_controllers() or []:
+        controllers.extend(clist)
+
     return controllers
 
 
@@ -191,25 +292,34 @@ ENDPOINT_MAP = collections.defaultdict(list)
 def generate_controller_routes(endpoint, mapper, base_url):
     inst = endpoint.inst
     ctrl_class = endpoint.ctrl
-    endp_base_url = None
 
     if endpoint.proxy:
         conditions = None
     else:
         conditions = dict(method=[endpoint.method])
 
+    # base_url can be empty or a URL path that starts with "/"
+    # we will remove the trailing "/" if exists to help with the
+    # concatenation with the endpoint url below
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+
     endp_url = endpoint.url
-    if base_url == "/":
-        base_url = ""
-    if endp_url == "/" and base_url:
-        endp_url = ""
+
+    if endp_url.find("/", 1) == -1:
+        parent_url = "{}{}".format(base_url, endp_url)
+    else:
+        parent_url = "{}{}".format(base_url, endp_url[:endp_url.find("/", 1)])
+
+    # parent_url might be of the form "/.../{...}" where "{...}" is a path parameter
+    # we need to remove the path parameter definition
+    parent_url = re.sub(r'(?:/\{[^}]+\})$', '', parent_url)
+    if not parent_url:  # root path case
+        parent_url = "/"
+
     url = "{}{}".format(base_url, endp_url)
 
-    if '/' in url[len(base_url)+1:]:
-        endp_base_url = url[:len(base_url)+1+endp_url[1:].find('/')]
-    else:
-        endp_base_url = url
-
+    logger = logging.getLogger('controller')
     logger.debug("Mapped [%s] to %s:%s restricted to %s",
                  url, ctrl_class.__name__, endpoint.action,
                  endpoint.method)
@@ -226,7 +336,7 @@ def generate_controller_routes(endpoint, mapper, base_url):
     mapper.connect(name, url, controller=inst, action=endpoint.action,
                    conditions=conditions)
 
-    return endp_base_url
+    return parent_url
 
 
 def generate_routes(url_prefix):
@@ -247,6 +357,7 @@ def generate_routes(url_prefix):
         parent_urls.add(generate_controller_routes(endpoint, mapper,
                                                    "{}".format(url_prefix)))
 
+    logger = logging.getLogger('controller')
     logger.debug("list of parent paths: %s", parent_urls)
     return mapper, parent_urls
 
@@ -255,74 +366,6 @@ def json_error_page(status, message, traceback, version):
     cherrypy.response.headers['Content-Type'] = 'application/json'
     return json.dumps(dict(status=status, detail=message, traceback=traceback,
                            version=version))
-
-
-class Task(object):
-    def __init__(self, name, metadata, wait_for=5.0, exception_handler=None):
-        self.name = name
-        if isinstance(metadata, list):
-            self.metadata = dict([(e[1:-1], e) for e in metadata])
-        else:
-            self.metadata = metadata
-        self.wait_for = wait_for
-        self.exception_handler = exception_handler
-
-    def _gen_arg_map(self, func, args, kwargs):
-        # pylint: disable=deprecated-method
-        arg_map = {}
-        if sys.version_info > (3, 0):  # pylint: disable=no-else-return
-            sig = inspect.signature(func)
-            arg_list = [a for a in sig.parameters]
-        else:
-            sig = getargspec(func)
-            arg_list = [a for a in sig.args]
-
-        for idx, arg in enumerate(arg_list):
-            if idx < len(args):
-                arg_map[arg] = args[idx]
-            else:
-                if arg in kwargs:
-                    arg_map[arg] = kwargs[arg]
-            if arg in arg_map:
-                # This is not a type error. We are using the index here.
-                arg_map[idx] = arg_map[arg]
-
-        return arg_map
-
-    def __call__(self, func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            arg_map = self._gen_arg_map(func, args, kwargs)
-            md = {}
-            for k, v in self.metadata.items():
-                if isinstance(v, str) and v and v[0] == '{' and v[-1] == '}':
-                    param = v[1:-1]
-                    try:
-                        pos = int(param)
-                        md[k] = arg_map[pos]
-                    except ValueError:
-                        md[k] = arg_map[v[1:-1]]
-                else:
-                    md[k] = v
-            task = TaskManager.run(self.name, md, func, args, kwargs,
-                                   exception_handler=self.exception_handler)
-            try:
-                status, value = task.wait(self.wait_for)
-            except Exception as ex:
-                if task.ret_value:
-                    # exception was handled by task.exception_handler
-                    if 'status' in task.ret_value:
-                        status = task.ret_value['status']
-                    else:
-                        status = getattr(ex, 'status', 500)
-                    cherrypy.response.status = status
-                    return task.ret_value
-                raise ex
-            if status == TaskManager.VALUE_EXECUTING:
-                cherrypy.response.status = 202
-                return {'name': self.name, 'metadata': md}
-            return value
-        return wrapper
 
 
 def _get_function_params(func):
@@ -349,6 +392,79 @@ def _get_function_params(func):
             })
 
     return func_params
+
+
+class Task(object):
+    def __init__(self, name, metadata, wait_for=5.0, exception_handler=None):
+        self.name = name
+        if isinstance(metadata, list):
+            self.metadata = {e[1:-1]: e for e in metadata}
+        else:
+            self.metadata = metadata
+        self.wait_for = wait_for
+        self.exception_handler = exception_handler
+
+    def _gen_arg_map(self, func, args, kwargs):
+        arg_map = {}
+        params = _get_function_params(func)
+
+        args = args[1:]  # exclude self
+        for idx, param in enumerate(params):
+            if idx < len(args):
+                arg_map[param['name']] = args[idx]
+            else:
+                if param['name'] in kwargs:
+                    arg_map[param['name']] = kwargs[param['name']]
+                else:
+                    assert not param['required'], "{0} is required".format(param['name'])
+                    arg_map[param['name']] = param['default']
+
+            if param['name'] in arg_map:
+                # This is not a type error. We are using the index here.
+                arg_map[idx+1] = arg_map[param['name']]
+
+        return arg_map
+
+    def __call__(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            arg_map = self._gen_arg_map(func, args, kwargs)
+            metadata = {}
+            for k, v in self.metadata.items():
+                if isinstance(v, str) and v and v[0] == '{' and v[-1] == '}':
+                    param = v[1:-1]
+                    try:
+                        pos = int(param)
+                        metadata[k] = arg_map[pos]
+                    except ValueError:
+                        if param.find('.') == -1:
+                            metadata[k] = arg_map[param]
+                        else:
+                            path = param.split('.')
+                            metadata[k] = arg_map[path[0]]
+                            for i in range(1, len(path)):
+                                metadata[k] = metadata[k][path[i]]
+                else:
+                    metadata[k] = v
+            task = TaskManager.run(self.name, metadata, func, args, kwargs,
+                                   exception_handler=self.exception_handler)
+            try:
+                status, value = task.wait(self.wait_for)
+            except Exception as ex:
+                if task.ret_value:
+                    # exception was handled by task.exception_handler
+                    if 'status' in task.ret_value:
+                        status = task.ret_value['status']
+                    else:
+                        status = getattr(ex, 'status', 500)
+                    cherrypy.response.status = status
+                    return task.ret_value
+                raise ex
+            if status == TaskManager.VALUE_EXECUTING:
+                cherrypy.response.status = 202
+                return {'name': self.name, 'metadata': metadata}
+            return value
+        return wrapper
 
 
 class BaseController(object):
@@ -381,7 +497,8 @@ class BaseController(object):
         @property
         def function(self):
             return self.ctrl._request_wrapper(self.func, self.method,
-                                              self.config['json_response'])
+                                              self.config['json_response'],
+                                              self.config['xml'])
 
         @property
         def method(self):
@@ -393,10 +510,13 @@ class BaseController(object):
 
         @property
         def url(self):
+            ctrl_path = self.ctrl.get_path()
+            if ctrl_path == "/":
+                ctrl_path = ""
             if self.config['path'] is not None:
-                url = "{}{}".format(self.ctrl.get_path(), self.config['path'])
+                url = "{}{}".format(ctrl_path, self.config['path'])
             else:
-                url = "{}/{}".format(self.ctrl.get_path(), self.func.__name__)
+                url = "{}/{}".format(ctrl_path, self.func.__name__)
 
             ctrl_path_params = self.ctrl.get_path_param_names(
                 self.config['path'])
@@ -467,8 +587,10 @@ class BaseController(object):
                                                  self.action)
 
     def __init__(self):
+        logger = logging.getLogger('controller')
         logger.info('Initializing controller: %s -> %s',
                     self.__class__.__name__, self._cp_path_)
+        super(BaseController, self).__init__()
 
     def _has_permissions(self, permissions, scope=None):
         if not self._cp_config['tools.authenticate.on']:
@@ -483,7 +605,7 @@ class BaseController(object):
         if scope is None:
             raise Exception("Cannot verify permissions without scope security"
                             " defined")
-        username = cherrypy.session.get(Session.USERNAME)
+        username = JwtManager.LOCAL_USER.username
         return AuthManager.authorize(username, scope, permissions)
 
     @classmethod
@@ -524,43 +646,57 @@ class BaseController(object):
         return result
 
     @staticmethod
-    def _request_wrapper(func, method, json_response):
+    def _request_wrapper(func, method, json_response, xml):  # pylint: disable=unused-argument
         @wraps(func)
         def inner(*args, **kwargs):
             for key, value in kwargs.items():
-                # pylint: disable=undefined-variable
-                if (sys.version_info < (3, 0) and isinstance(value, unicode)) \
-                        or isinstance(value, str):
+                if isinstance(value, six.text_type):
                     kwargs[key] = unquote(value)
 
-            if method in ['GET', 'DELETE']:
-                ret = func(*args, **kwargs)
+            # Process method arguments.
+            params = get_request_body_params(cherrypy.request)
+            kwargs.update(params)
 
-            elif cherrypy.request.headers.get('Content-Type', '') == \
-                    'application/x-www-form-urlencoded':
-                ret = func(*args, **kwargs)
-
-            else:
-                content_length = int(cherrypy.request.headers['Content-Length'])
-                body = cherrypy.request.body.read(content_length)
-                if not body:
-                    ret = func(*args, **kwargs)
-                else:
-                    try:
-                        data = json.loads(body.decode('utf-8'))
-                    except Exception as e:
-                        raise cherrypy.HTTPError(400, 'Failed to decode JSON: {}'
-                                                 .format(str(e)))
-                    kwargs.update(data.items())
-                    ret = func(*args, **kwargs)
-
+            ret = func(*args, **kwargs)
             if isinstance(ret, bytes):
                 ret = ret.decode('utf-8')
+            if xml:
+                cherrypy.response.headers['Content-Type'] = 'application/xml'
+                return ret.encode('utf8')
             if json_response:
                 cherrypy.response.headers['Content-Type'] = 'application/json'
                 ret = json.dumps(ret).encode('utf8')
             return ret
         return inner
+
+    @property
+    def _request(self):
+        return self.Request(cherrypy.request)
+
+    class Request(object):
+        def __init__(self, cherrypy_req):
+            self._creq = cherrypy_req
+
+        @property
+        def scheme(self):
+            return self._creq.scheme
+
+        @property
+        def host(self):
+            base = self._creq.base
+            base = base[len(self.scheme)+3:]
+            return base[:base.find(":")] if ":" in base else base
+
+        @property
+        def port(self):
+            base = self._creq.base
+            base = base[len(self.scheme)+3:]
+            default_port = 443 if self.scheme == 'https' else 80
+            return int(base[base.find(":")+1:]) if ":" in base else default_port
+
+        @property
+        def path_info(self):
+            return self._creq.path_info
 
 
 class RESTController(BaseController):
@@ -588,10 +724,10 @@ class RESTController(BaseController):
     """
 
     # resource id parameter for using in get, set, and delete methods
-    # should be overriden by subclasses.
+    # should be overridden by subclasses.
     # to specify a composite id (two parameters) use '/'. e.g., "param1/param2".
     # If subclasses don't override this property we try to infer the structure
-    # of the resourse ID.
+    # of the resource ID.
     RESOURCE_ID = None
 
     _permission_map = {
@@ -719,7 +855,7 @@ class RESTController(BaseController):
         return wrapper
 
     @staticmethod
-    def Resource(method=None, path=None, status=None, query_params=None):
+    def Resource(method=None, path=None, status=None, query_params=None):  # noqa: N802
         if not method:
             method = 'GET'
 
@@ -737,7 +873,7 @@ class RESTController(BaseController):
         return _wrapper
 
     @staticmethod
-    def Collection(method=None, path=None, status=None, query_params=None):
+    def Collection(method=None, path=None, status=None, query_params=None):  # noqa: N802
         if not method:
             method = 'GET'
 
@@ -763,6 +899,7 @@ def _set_func_permissions(func, permissions):
 
     for perm in permissions:
         if not Permission.valid_permission(perm):
+            logger = logging.getLogger('controller.set_func_perms')
             logger.debug("Invalid security permission: %s\n "
                          "Possible values: %s", perm,
                          Permission.all_permissions())
@@ -775,21 +912,21 @@ def _set_func_permissions(func, permissions):
         func._security_permissions = list(set(permissions))
 
 
-def ReadPermission(func):
+def ReadPermission(func):  # noqa: N802
     _set_func_permissions(func, Permission.READ)
     return func
 
 
-def CreatePermission(func):
+def CreatePermission(func):  # noqa: N802
     _set_func_permissions(func, Permission.CREATE)
     return func
 
 
-def DeletePermission(func):
+def DeletePermission(func):  # noqa: N802
     _set_func_permissions(func, Permission.DELETE)
     return func
 
 
-def UpdatePermission(func):
+def UpdatePermission(func):  # noqa: N802
     _set_func_permissions(func, Permission.UPDATE)
     return func

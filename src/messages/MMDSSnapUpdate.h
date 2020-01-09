@@ -17,26 +17,27 @@
 
 #include "msg/Message.h"
 
-class MMDSSnapUpdate : public Message {
+class MMDSSnapUpdate : public SafeMessage {
+private:
   inodeno_t ino;
   __s16 snap_op;
 
 public:
-  inodeno_t get_ino() { return ino; }
-  int get_snap_op() { return snap_op; }
+  inodeno_t get_ino() const { return ino; }
+  int get_snap_op() const { return snap_op; }
 
   bufferlist snap_blob;
 
-  MMDSSnapUpdate() : Message(MSG_MDS_SNAPUPDATE) {}
+protected:
+  MMDSSnapUpdate() : SafeMessage{MSG_MDS_SNAPUPDATE} {}
   MMDSSnapUpdate(inodeno_t i, version_t tid, int op) :
-    Message(MSG_MDS_SNAPUPDATE), ino(i), snap_op(op) {
+    SafeMessage{MSG_MDS_SNAPUPDATE}, ino(i), snap_op(op) {
       set_tid(tid);
     }
-private:
   ~MMDSSnapUpdate() override {}
 
 public:
-  const char *get_type_name() const override { return "snap_update"; }
+  std::string_view get_type_name() const override { return "snap_update"; }
   void print(ostream& o) const override {
     o << "snap_update(" << ino << " table_tid " << get_tid() << ")";
   }
@@ -54,6 +55,9 @@ public:
     decode(snap_op, p);
     decode(snap_blob, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

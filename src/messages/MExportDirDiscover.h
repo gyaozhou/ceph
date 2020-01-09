@@ -18,32 +18,35 @@
 #include "msg/Message.h"
 #include "include/types.h"
 
-class MExportDirDiscover : public Message {
+class MExportDirDiscover : public SafeMessage {
+private:
+  static const int HEAD_VERSION = 1;
+  static const int COMPAT_VERSION = 1;
   mds_rank_t from = -1;
   dirfrag_t dirfrag;
   filepath path;
 
  public:
-  mds_rank_t get_source_mds() { return from; }
-  inodeno_t get_ino() { return dirfrag.ino; }
-  dirfrag_t get_dirfrag() { return dirfrag; }
-  filepath& get_path() { return path; }
+  mds_rank_t get_source_mds() const { return from; }
+  inodeno_t get_ino() const { return dirfrag.ino; }
+  dirfrag_t get_dirfrag() const { return dirfrag; }
+  const filepath& get_path() const { return path; }
 
   bool started;
 
+protected:
   MExportDirDiscover() :     
-    Message(MSG_MDS_EXPORTDIRDISCOVER),
+    SafeMessage{MSG_MDS_EXPORTDIRDISCOVER, HEAD_VERSION, COMPAT_VERSION},
     started(false) { }
   MExportDirDiscover(dirfrag_t df, filepath& p, mds_rank_t f, uint64_t tid) :
-    Message(MSG_MDS_EXPORTDIRDISCOVER),
+    SafeMessage{MSG_MDS_EXPORTDIRDISCOVER, HEAD_VERSION, COMPAT_VERSION},
     from(f), dirfrag(df), path(p), started(false) {
     set_tid(tid);
   }
-private:
   ~MExportDirDiscover() override {}
 
 public:
-  const char *get_type_name() const override { return "ExDis"; }
+  std::string_view get_type_name() const override { return "ExDis"; }
   void print(ostream& o) const override {
     o << "export_discover(" << dirfrag << " " << path << ")";
   }
@@ -61,6 +64,9 @@ public:
     encode(dirfrag, payload);
     encode(path, payload);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

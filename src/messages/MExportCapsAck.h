@@ -19,20 +19,23 @@
 #include "msg/Message.h"
 
 
-class MExportCapsAck : public Message {
- public:  
+class MExportCapsAck : public SafeMessage {
+ static constexpr int HEAD_VERSION = 1;
+ static constexpr int COMPAT_VERSION = 1;
+
+public:  
   inodeno_t ino;
   bufferlist cap_bl;
 
+protected:
   MExportCapsAck() :
-    Message(MSG_MDS_EXPORTCAPSACK) {}
+    SafeMessage{MSG_MDS_EXPORTCAPSACK, HEAD_VERSION, COMPAT_VERSION} {}
   MExportCapsAck(inodeno_t i) :
-    Message(MSG_MDS_EXPORTCAPSACK), ino(i) {}
-private:
+    SafeMessage{MSG_MDS_EXPORTCAPSACK, HEAD_VERSION, COMPAT_VERSION}, ino(i) {}
   ~MExportCapsAck() override {}
 
 public:
-  const char *get_type_name() const override { return "export_caps_ack"; }
+  std::string_view get_type_name() const override { return "export_caps_ack"; }
   void print(ostream& o) const override {
     o << "export_caps_ack(" << ino << ")";
   }
@@ -47,6 +50,9 @@ public:
     decode(ino, p);
     decode(cap_bl, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

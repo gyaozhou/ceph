@@ -11,7 +11,7 @@
 #include <boost/bind.hpp>
 
 // re-include our assert to clobber the system one; fix dout:
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 
 #define dout_subsys ceph_subsys_rbd
 
@@ -45,7 +45,7 @@ struct C_UnwatchAndFlush : public Context {
 
       librados::AioCompletion *aio_comp = create_rados_callback(this);
       r = rados.aio_watch_flush(aio_comp);
-      assert(r == 0);
+      ceph_assert(r == 0);
       aio_comp->release();
       return;
     }
@@ -79,7 +79,7 @@ Watcher::C_NotifyAck::C_NotifyAck(Watcher *watcher, uint64_t notify_id,
 
 void Watcher::C_NotifyAck::finish(int r) {
   ldout(cct, 10) << "r=" << r << dendl;
-  assert(r == 0);
+  ceph_assert(r == 0);
   watcher->acknowledge_notify(notify_id, handle, out);
 }
 
@@ -91,27 +91,28 @@ Watcher::Watcher(librados::IoCtx& ioctx, ContextWQ *work_queue,
                           const string& oid)
   : m_ioctx(ioctx), m_work_queue(work_queue), m_oid(oid),
     m_cct(reinterpret_cast<CephContext *>(ioctx.cct())),
-    m_watch_lock(util::unique_lock_name("librbd::Watcher::m_watch_lock", this)),
+    m_watch_lock(ceph::make_shared_mutex(util::unique_lock_name("librbd::Watcher::m_watch_lock", this))),
     m_watch_handle(0), m_notifier(work_queue, ioctx, oid),
     m_watch_state(WATCH_STATE_IDLE), m_watch_ctx(*this) {
 }
 
 Watcher::~Watcher() {
-  RWLock::RLocker l(m_watch_lock);
-  assert(is_unregistered(m_watch_lock));
+  std::shared_lock l{m_watch_lock};
+  ceph_assert(is_unregistered(m_watch_lock));
 }
 
 void Watcher::register_watch(Context *on_finish) {
   ldout(m_cct, 10) << dendl;
 
-  RWLock::RLocker watch_locker(m_watch_lock);
-  assert(is_unregistered(m_watch_lock));
+  std::unique_lock watch_locker{m_watch_lock};
+  ceph_assert(is_unregistered(m_watch_lock));
   m_watch_state = WATCH_STATE_REGISTERING;
+  m_watch_blacklisted = false;
 
   librados::AioCompletion *aio_comp = create_rados_callback(
     new C_RegisterWatch(this, on_finish));
   int r = m_ioctx.aio_watch(m_oid, aio_comp, &m_watch_handle, &m_watch_ctx);
-  assert(r == 0);
+  ceph_assert(r == 0);
   aio_comp->release();
 }
 
@@ -121,8 +122,8 @@ void Watcher::handle_register_watch(int r, Context *on_finish) {
   bool watch_error = false;
   Context *unregister_watch_ctx = nullptr;
   {
-    RWLock::WLocker watch_locker(m_watch_lock);
-    assert(m_watch_state == WATCH_STATE_REGISTERING);
+    std::unique_lock watch_locker{m_watch_lock};
+    ceph_assert(m_watch_state == WATCH_STATE_REGISTERING);
 
     m_watch_state = WATCH_STATE_IDLE;
     if (r < 0) {
@@ -137,6 +138,8 @@ void Watcher::handle_register_watch(int r, Context *on_finish) {
       lderr(m_cct) << "re-registering watch after error" << dendl;
       m_watch_state = WATCH_STATE_REWATCHING;
       watch_error = true;
+    } else {
+      m_watch_blacklisted = (r == -EBLACKLISTED);
     }
   }
 
@@ -153,23 +156,25 @@ void Watcher::unregister_watch(Context *on_finish) {
   ldout(m_cct, 10) << dendl;
 
   {
-    RWLock::WLocker watch_locker(m_watch_lock);
+    std::unique_lock watch_locker{m_watch_lock};
     if (m_watch_state != WATCH_STATE_IDLE) {
       ldout(m_cct, 10) << "delaying unregister until register completed"
                        << dendl;
 
-      assert(m_unregister_watch_ctx == nullptr);
-      m_unregister_watch_ctx = new FunctionContext([this, on_finish](int r) {
+      ceph_assert(m_unregister_watch_ctx == nullptr);
+      m_unregister_watch_ctx = new LambdaContext([this, on_finish](int r) {
           unregister_watch(on_finish);
         });
       return;
     } else if (is_registered(m_watch_lock)) {
       librados::AioCompletion *aio_comp = create_rados_callback(
-                        new C_UnwatchAndFlush(m_ioctx, on_finish));
+        new C_UnwatchAndFlush(m_ioctx, on_finish));
       int r = m_ioctx.aio_unwatch(m_watch_handle, aio_comp);
-      assert(r == 0);
+      ceph_assert(r == 0);
       aio_comp->release();
+
       m_watch_handle = 0;
+      m_watch_blacklisted = false;
       return;
     }
   }
@@ -178,7 +183,7 @@ void Watcher::unregister_watch(Context *on_finish) {
 }
 
 bool Watcher::notifications_blocked() const {
-  RWLock::RLocker locker(m_watch_lock);
+  std::shared_lock locker{m_watch_lock};
 
   bool blocked = (m_blocked_count > 0);
   ldout(m_cct, 5) << "blocked=" << blocked << dendl;
@@ -187,7 +192,7 @@ bool Watcher::notifications_blocked() const {
 
 void Watcher::block_notifies(Context *on_finish) {
   {
-    RWLock::WLocker locker(m_watch_lock);
+    std::unique_lock locker{m_watch_lock};
     ++m_blocked_count;
     ldout(m_cct, 5) << "blocked_count=" << m_blocked_count << dendl;
   }
@@ -195,8 +200,8 @@ void Watcher::block_notifies(Context *on_finish) {
 }
 
 void Watcher::unblock_notifies() {
-  RWLock::WLocker locker(m_watch_lock);
-  assert(m_blocked_count > 0);
+  std::unique_lock locker{m_watch_lock};
+  ceph_assert(m_blocked_count > 0);
   --m_blocked_count;
   ldout(m_cct, 5) << "blocked_count=" << m_blocked_count << dendl;
 }
@@ -206,13 +211,13 @@ void Watcher::flush(Context *on_finish) {
 }
 
 std::string Watcher::get_oid() const {
-  RWLock::RLocker locker(m_watch_lock);
+  std::shared_lock locker{m_watch_lock};
   return m_oid;
 }
 
 void Watcher::set_oid(const string& oid) {
-  RWLock::WLocker watch_locker(m_watch_lock);
-  assert(is_unregistered(m_watch_lock));
+  std::unique_lock watch_locker{m_watch_lock};
+  ceph_assert(is_unregistered(m_watch_lock));
 
   m_oid = oid;
 }
@@ -220,13 +225,16 @@ void Watcher::set_oid(const string& oid) {
 void Watcher::handle_error(uint64_t handle, int err) {
   lderr(m_cct) << "handle=" << handle << ": " << cpp_strerror(err) << dendl;
 
-  RWLock::WLocker watch_locker(m_watch_lock);
+  std::unique_lock watch_locker{m_watch_lock};
   m_watch_error = true;
 
   if (is_registered(m_watch_lock)) {
     m_watch_state = WATCH_STATE_REWATCHING;
+    if (err == -EBLACKLISTED) {
+      m_watch_blacklisted = true;
+    }
 
-    FunctionContext *ctx = new FunctionContext(
+    auto ctx = new LambdaContext(
         boost::bind(&Watcher::rewatch, this));
     m_work_queue->queue(ctx);
   }
@@ -242,8 +250,8 @@ void Watcher::rewatch() {
 
   Context *unregister_watch_ctx = nullptr;
   {
-    RWLock::WLocker watch_locker(m_watch_lock);
-    assert(m_watch_state == WATCH_STATE_REWATCHING);
+    std::unique_lock watch_locker{m_watch_lock};
+    ceph_assert(m_watch_state == WATCH_STATE_REWATCHING);
 
     if (m_unregister_watch_ctx != nullptr) {
       m_watch_state = WATCH_STATE_IDLE;
@@ -268,15 +276,17 @@ void Watcher::handle_rewatch(int r) {
   bool watch_error = false;
   Context *unregister_watch_ctx = nullptr;
   {
-    RWLock::WLocker watch_locker(m_watch_lock);
-    assert(m_watch_state == WATCH_STATE_REWATCHING);
+    std::unique_lock watch_locker{m_watch_lock};
+    ceph_assert(m_watch_state == WATCH_STATE_REWATCHING);
 
+    m_watch_blacklisted = false;
     if (m_unregister_watch_ctx != nullptr) {
       ldout(m_cct, 10) << "image is closing, skip rewatch" << dendl;
       m_watch_state = WATCH_STATE_IDLE;
       std::swap(unregister_watch_ctx, m_unregister_watch_ctx);
     } else if (r  == -EBLACKLISTED) {
       lderr(m_cct) << "client blacklisted" << dendl;
+      m_watch_blacklisted = true;
     } else if (r == -ENOENT) {
       ldout(m_cct, 5) << "object does not exist" << dendl;
     } else if (r < 0) {
@@ -308,15 +318,15 @@ void Watcher::handle_rewatch_callback(int r) {
   bool watch_error = false;
   Context *unregister_watch_ctx = nullptr;
   {
-    RWLock::WLocker watch_locker(m_watch_lock);
-    assert(m_watch_state == WATCH_STATE_REWATCHING);
+    std::unique_lock watch_locker{m_watch_lock};
+    ceph_assert(m_watch_state == WATCH_STATE_REWATCHING);
 
     if (m_unregister_watch_ctx != nullptr) {
       m_watch_state = WATCH_STATE_IDLE;
       std::swap(unregister_watch_ctx, m_unregister_watch_ctx);
-    } else if (r  == -EBLACKLISTED || r == -ENOENT) {
+    } else if (r == -ENOENT) {
       m_watch_state = WATCH_STATE_IDLE;
-    } else if (m_watch_error) {
+    } else if (r < 0 || m_watch_error) {
       watch_error = true;
     } else {
       m_watch_state = WATCH_STATE_IDLE;

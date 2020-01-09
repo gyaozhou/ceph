@@ -23,30 +23,25 @@ public:
   typedef std::list<journal::Journaler *> Journalers;
 
   struct ReplayHandler : public journal::ReplayHandler {
-    Mutex lock;
-    Cond cond;
+    ceph::mutex lock = ceph::make_mutex("ReplayHandler::lock");
+    ceph::condition_variable cond;
     bool entries_available;
     bool complete;
 
     ReplayHandler()
-      : lock("ReplayHandler::lock"), entries_available(false), complete(false) {
-    }
-
-    void get() override {
-    }
-    void put() override {
+      : entries_available(false), complete(false) {
     }
 
     void handle_entries_available() override  {
-      Mutex::Locker locker(lock);
+      std::lock_guard locker{lock};
       entries_available = true;
-      cond.Signal();
+      cond.notify_all();
     }
 
     void handle_complete(int r) override {
-      Mutex::Locker locker(lock);
+      std::lock_guard locker{lock};
       complete = true;
-      cond.Signal();
+      cond.notify_all();
     }
   };
 
@@ -67,7 +62,7 @@ public:
 
   journal::Journaler *create_journaler(librbd::ImageCtx *ictx) {
     journal::Journaler *journaler = new journal::Journaler(
-      ictx->md_ctx, ictx->id, "dummy client", {});
+      ictx->md_ctx, ictx->id, "dummy client", {}, nullptr);
 
     int r = journaler->register_client(bufferlist());
     if (r < 0) {
@@ -91,10 +86,9 @@ public:
   }
 
   bool wait_for_entries_available(librbd::ImageCtx *ictx) {
-    Mutex::Locker locker(m_replay_handler.lock);
+    std::unique_lock locker{m_replay_handler.lock};
     while (!m_replay_handler.entries_available) {
-      if (m_replay_handler.cond.WaitInterval(m_replay_handler.lock,
-					     utime_t(10, 0)) != 0) {
+      if (m_replay_handler.cond.wait_for(locker, 10s) == std::cv_status::timeout) {
 	return false;
       }
     }
@@ -164,7 +158,7 @@ TEST_F(TestJournalEntries, AioDiscard) {
   REQUIRE_FEATURE(RBD_FEATURE_JOURNALING);
 
   CephContext* cct = reinterpret_cast<CephContext*>(_rados.cct());
-  REQUIRE(!cct->_conf->get_val<bool>("rbd_skip_partial_discard"));
+  REQUIRE(!cct->_conf.get_val<bool>("rbd_skip_partial_discard"));
 
   librbd::ImageCtx *ictx;
   ASSERT_EQ(0, open_image(m_image_name, &ictx));
@@ -175,7 +169,8 @@ TEST_F(TestJournalEntries, AioDiscard) {
   C_SaferCond cond_ctx;
   auto c = librbd::io::AioCompletion::create(&cond_ctx);
   c->get();
-  ictx->io_work_queue->aio_discard(c, 123, 234, ictx->skip_partial_discard);
+  ictx->io_work_queue->aio_discard(c, 123, 234,
+                                   ictx->discard_granularity_bytes);
   ASSERT_EQ(0, c->wait_for_complete());
   c->put();
 

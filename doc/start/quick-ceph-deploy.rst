@@ -11,7 +11,7 @@ explore Ceph functionality.
 
 As a first exercise, create a Ceph Storage Cluster with one Ceph Monitor and three
 Ceph OSD Daemons. Once the cluster reaches a ``active + clean`` state, expand it
-by adding a fourth Ceph OSD Daemon, a Metadata Server and two more Ceph Monitors.
+by adding a fourth Ceph OSD Daemon, and two more Ceph Monitors.
 For best results, create a directory on your admin node for maintaining the
 configuration files and keys that ``ceph-deploy`` generates for your cluster. ::
 
@@ -62,6 +62,12 @@ configuration details, perform the following steps using ``ceph-deploy``.
    and a log file for the new cluster.  See `ceph-deploy new -h`_ for
    additional details.
 
+   Note for users of Ubuntu 18.04: Python 2 is a prerequisite of Ceph.
+   Install the ``python-minimal`` package on Ubuntu 18.04 to provide
+   Python 2::
+
+     [Ubuntu 18.04] $ sudo apt install python-minimal
+
 #. If you have more than one network interface, add the ``public network``
    setting under the ``[global]`` section of your Ceph configuration file.
    See the `Network Configuration Reference`_ for details. ::
@@ -102,11 +108,12 @@ configuration details, perform the following steps using ``ceph-deploy``.
    - ``ceph.bootstrap-mds.keyring``
    - ``ceph.bootstrap-rgw.keyring``
    - ``ceph.bootstrap-rbd.keyring``
+   - ``ceph.bootstrap-rbd-mirror.keyring``
 
-.. note:: If this process fails with a message similar to "Unable to
-   find /etc/ceph/ceph.client.admin.keyring", please ensure that the
-   IP listed for the monitor node in ceph.conf is the Public IP, not
-   the Private IP.
+   .. note:: If this process fails with a message similar to "Unable to
+      find /etc/ceph/ceph.client.admin.keyring", please ensure that the
+      IP listed for the monitor node in ceph.conf is the Public IP, not
+      the Private IP.
 
 #. Use ``ceph-deploy`` to copy the configuration file and admin key to
    your admin node and your Ceph Nodes so that you can use the ``ceph``
@@ -124,7 +131,7 @@ configuration details, perform the following steps using ``ceph-deploy``.
      ceph-deploy mgr create node1  *Required only for luminous+ builds, i.e >= 12.x builds*
 
 #. Add three OSDs. For the purposes of these instructions, we assume you have an
-   unused disk in each node called ``/dev/vdb``.  *Be sure that the device is not currently in use and does not contain any important data.*
+   unused disk in each node called ``/dev/vdb``.  *Be sure that the device is not currently in use and does not contain any important data.* ::
 
      ceph-deploy osd create --data {device} {ceph-node}
 
@@ -133,6 +140,10 @@ configuration details, perform the following steps using ``ceph-deploy``.
      ceph-deploy osd create --data /dev/vdb node1
      ceph-deploy osd create --data /dev/vdb node2
      ceph-deploy osd create --data /dev/vdb node3
+
+   .. note:: If you are creating an OSD on an LVM volume, the argument to
+      ``--data`` *must* be ``volume_group/lv_name``, rather than the path to
+      the volume's block device.
 
 #. Check your cluster's health. ::
 
@@ -147,25 +158,25 @@ configuration details, perform the following steps using ``ceph-deploy``.
 Expanding Your Cluster
 ======================
 
-Once you have a basic cluster up and running, the next step is to
-expand cluster. Add a Ceph Metadata Server to ``node1``.  Then add a
-Ceph Monitor and Ceph Manager to ``node2`` and ``node3`` to improve reliability and availability.
+Once you have a basic cluster up and running, the next step is to expand
+cluster. Then add a Ceph Monitor and Ceph Manager to ``node2`` and ``node3``
+to improve reliability and availability.
 
 .. ditaa::
            /------------------\         /----------------\
            |    ceph-deploy   |         |     node1      |
            |    Admin Node    |         | cCCC           |
-           |                  +-------->+   mon.node1    |
+           |                  +-------->+                |
+           |                  |         |   mon.node1    |
            |                  |         |     osd.0      |
            |                  |         |   mgr.node1    |
-           |                  |         |   mds.node1    |
            \---------+--------/         \----------------/
                      |
                      |                  /----------------\
                      |                  |     node2      |
                      |                  | cCCC           |
                      +----------------->+                |
-                     |                  |     osd.0      |
+                     |                  |     osd.1      |
                      |                  |   mon.node2    |
                      |                  \----------------/
                      |
@@ -173,21 +184,9 @@ Ceph Monitor and Ceph Manager to ``node2`` and ``node3`` to improve reliability 
                      |                  |     node3      |
                      |                  | cCCC           |
                      +----------------->+                |
-                                        |     osd.1      |
+                                        |     osd.2      |
                                         |   mon.node3    |
                                         \----------------/
-
-Add a Metadata Server
----------------------
-
-To use CephFS, you need at least one metadata server. Execute the following to
-create a metadata server::
-
-  ceph-deploy mds create {ceph-node}
-
-For example::
-
-  ceph-deploy mds create node1
 
 Adding Monitors
 ---------------
@@ -196,7 +195,7 @@ A Ceph Storage Cluster requires at least one Ceph Monitor and Ceph
 Manager to run. For high availability, Ceph Storage Clusters typically
 run multiple Ceph Monitors so that the failure of a single Ceph
 Monitor will not bring down the Ceph Storage Cluster. Ceph uses the
-Paxos algorithm, which requires a majority of monitors (i.e., greather
+Paxos algorithm, which requires a majority of monitors (i.e., greater
 than *N/2* where *N* is the number of monitors) to form a quorum.
 Odd numbers of monitors tend to be better, although this is not required.
 
@@ -294,7 +293,7 @@ example::
    ``rados put`` command on the command line. For example::
 
      echo {Test-data} > testfile.txt
-     ceph osd pool create mytest 8
+     ceph osd pool create mytest
      rados put {object-name} {file-path} --pool=mytest
      rados put test-object-1 testfile.txt --pool=mytest
 

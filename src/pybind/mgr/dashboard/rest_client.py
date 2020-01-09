@@ -13,17 +13,33 @@
 """
 from __future__ import absolute_import
 
-from .tools import build_url
 import inspect
+import logging
 import re
 import requests
-from requests.exceptions import ConnectionError, InvalidURL
-from . import logger
+from requests.exceptions import ConnectionError, InvalidURL, Timeout
+from .settings import Settings
+from .tools import build_url
 
 try:
     from requests.packages.urllib3.exceptions import SSLError
 except ImportError:
     from urllib3.exceptions import SSLError
+
+
+logger = logging.getLogger('rest_client')
+
+
+class TimeoutRequestsSession(requests.Session):
+    """
+    Set timeout argument for all requests if this is not already done.
+    """
+    def request(self, *args, **kwargs):
+        if ((args[8] if len(args) > 8 else None) is None) \
+                and kwargs.get('timeout') is None:
+            if Settings.REST_REQUESTS_TIMEOUT > 0:
+                kwargs['timeout'] = Settings.REST_REQUESTS_TIMEOUT
+        return super(TimeoutRequestsSession, self).request(*args, **kwargs)
 
 
 class RequestException(Exception):
@@ -126,7 +142,7 @@ class _ResponseValidator(object):
         In the above example the structure will validate against any response
         that contains a key named "return" in the root of the response
         dictionary and its value is a dictionary that must contain a key named
-        "key1" that is an array, a key named "key2", and optionaly a key named
+        "key1" that is an array, a key named "key2", and optionally a key named
         "key3" that is a dictionary that contains a key named "subkey".
 
     Example 7:
@@ -299,13 +315,13 @@ class _Request(object):
         resp = self.rest_client.do_request(method, self._gen_path(), params,
                                            data, raw_content)
         if raw_content and self.resp_structure:
-            raise Exception("Cannot validate reponse in raw format")
+            raise Exception("Cannot validate response in raw format")
         _ResponseValidator.validate(self.resp_structure, resp)
         return resp
 
 
 class RestClient(object):
-    def __init__(self, host, port, client_name=None, ssl=False, auth=None):
+    def __init__(self, host, port, client_name=None, ssl=False, auth=None, ssl_verify=True):
         super(RestClient, self).__init__()
         self.client_name = client_name if client_name else ''
         self.host = host
@@ -315,7 +331,8 @@ class RestClient(object):
         logger.debug("REST service base URL: %s", self.base_url)
         self.headers = {'Accept': 'application/json'}
         self.auth = auth
-        self.session = requests.Session()
+        self.session = TimeoutRequestsSession()
+        self.session.verify = ssl_verify
 
     def _login(self, request=None):
         pass
@@ -407,7 +424,6 @@ class RestClient(object):
                 logger.error(
                     "%s REST API failed %s req status: %s", self.client_name,
                     method.upper(), resp.status_code)
-                from pprint import pprint as pp
                 from pprint import pformat as pf
 
                 raise RequestException(
@@ -423,29 +439,33 @@ class RestClient(object):
                     errno = "n/a"
                     strerror = "SSL error. Probably trying to access a non " \
                                "SSL connection."
-                    logger.error("%s REST API failed %s, SSL error.",
-                                 self.client_name, method.upper())
+                    logger.error("%s REST API failed %s, SSL error (url=%s).",
+                                 self.client_name, method.upper(), ex.request.url)
                 else:
-                    match = re.match(r'.*: \[Errno (-?\d+)\] (.+)',
-                                     ex.args[0].reason.args[0])
+                    try:
+                        match = re.match(r'.*: \[Errno (-?\d+)\] (.+)',
+                                         ex.args[0].reason.args[0])
+                    except AttributeError:
+                        match = False
                     if match:
                         errno = match.group(1)
                         strerror = match.group(2)
                         logger.error(
-                            "%s REST API failed %s, connection error: "
+                            "%s REST API failed %s, connection error (url=%s): "
                             "[errno: %s] %s",
-                            self.client_name, method.upper(), errno, strerror)
+                            self.client_name, method.upper(), ex.request.url,
+                            errno, strerror)
                     else:
                         errno = "n/a"
                         strerror = "n/a"
                         logger.error(
-                            "%s REST API failed %s, connection error.",
-                            self.client_name, method.upper())
+                            "%s REST API failed %s, connection error (url=%s).",
+                            self.client_name, method.upper(), ex.request.url)
             else:
                 errno = "n/a"
                 strerror = "n/a"
-                logger.error("%s REST API failed %s, connection error.",
-                             self.client_name, method.upper())
+                logger.error("%s REST API failed %s, connection error (url=%s).",
+                             self.client_name, method.upper(), ex.request.url)
 
             if errno != "n/a":
                 ex_msg = (
@@ -465,6 +485,12 @@ class RestClient(object):
             logger.exception("%s REST API failed %s: %s", self.client_name,
                              method.upper(), str(ex))
             raise RequestException(str(ex))
+        except Timeout as ex:
+            msg = "{} REST API {} timed out after {} seconds (url={}).".format(
+                self.client_name, ex.request.method, Settings.REST_REQUESTS_TIMEOUT,
+                ex.request.url)
+            logger.exception(msg)
+            raise RequestException(msg)
 
     @staticmethod
     def api(path, **api_kwargs):

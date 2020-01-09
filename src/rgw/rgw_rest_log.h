@@ -1,5 +1,6 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
-// vim: ts=8 sw=2 smarttab
+// vim: ts=8 sw=2 smarttab ft=cpp
+
 /*
  * Ceph - scalable distributed file system
  *
@@ -12,10 +13,10 @@
  *
  */
 
-#ifndef RGW_REST_LOG_H
-#define RGW_REST_LOG_H
+#pragma once
 
 #include "rgw_metadata.h"
+#include "rgw_mdlog.h"
 
 class RGWOp_BILog_List : public RGWRESTOp {
   bool sent_header;
@@ -250,34 +251,6 @@ public:
   }
 };
 
-class RGWOp_DATALog_Lock : public RGWRESTOp {
-public:
-  RGWOp_DATALog_Lock() {}
-  ~RGWOp_DATALog_Lock() override {}
-
-  int check_caps(RGWUserCaps& caps) override {
-    return caps.check_cap("datalog", RGW_CAP_WRITE);
-  }
-  void execute() override;
-  const char* name() const override {
-    return "lock_datalog_object";
-  }
-};
-
-class RGWOp_DATALog_Unlock : public RGWRESTOp {
-public:
-  RGWOp_DATALog_Unlock() {}
-  ~RGWOp_DATALog_Unlock() override {}
-
-  int check_caps(RGWUserCaps& caps) override {
-    return caps.check_cap("datalog", RGW_CAP_WRITE);
-  }
-  void execute() override;
-  const char* name() const override {
-    return "unlock_datalog_object";
-  }
-};
-
 class RGWOp_DATALog_Notify : public RGWRESTOp {
 public:
   RGWOp_DATALog_Notify() {}
@@ -331,5 +304,3 @@ public:
     return new RGWHandler_Log(auth_registry);
   }
 };
-
-#endif /* RGW_REST_LOG_H */

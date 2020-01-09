@@ -17,8 +17,7 @@
 #define CEPH_MOSDREPOPREPLY_H
 
 #include "MOSDFastDispatchOp.h"
-
-#include "os/ObjectStore.h"
+#include "MOSDRepOp.h"
 
 /*
  * OSD Client Subop reply
@@ -29,8 +28,9 @@
  */
 
 class MOSDRepOpReply : public MOSDFastDispatchOp {
-  static const int HEAD_VERSION = 2;
-  static const int COMPAT_VERSION = 1;
+private:
+  static constexpr int HEAD_VERSION = 2;
+  static constexpr int COMPAT_VERSION = 1;
 public:
   epoch_t map_epoch, min_epoch;
 
@@ -46,8 +46,8 @@ public:
   // piggybacked osd state
   eversion_t last_complete_ondisk;
 
-  bufferlist::const_iterator p;
-  // Decoding flags. Decoding is only needed for messages catched by pipe reader.
+  ceph::buffer::list::const_iterator p;
+  // Decoding flags. Decoding is only needed for messages caught by pipe reader.
   bool final_decode_needed;
 
   epoch_t get_map_epoch() const override {
@@ -61,6 +61,7 @@ public:
   }
 
   void decode_payload() override {
+    using ceph::decode;
     p = payload.cbegin();
     decode(map_epoch, p);
     if (header.version >= 2) {
@@ -74,6 +75,7 @@ public:
   }
 
   void finish_decode() {
+    using ceph::decode;
     if (!final_decode_needed)
       return; // Message is already final decoded
     decode(ack_type, p);
@@ -116,7 +118,7 @@ public:
   MOSDRepOpReply(
     const MOSDRepOp *req, pg_shard_t from, int result_, epoch_t e, epoch_t mine,
     int at) :
-    MOSDFastDispatchOp(MSG_OSD_REPOPREPLY, HEAD_VERSION, COMPAT_VERSION),
+    MOSDFastDispatchOp{MSG_OSD_REPOPREPLY, HEAD_VERSION, COMPAT_VERSION},
     map_epoch(e),
     min_epoch(mine),
     reqid(req->reqid),
@@ -128,7 +130,7 @@ public:
     set_tid(req->get_tid());
   }
   MOSDRepOpReply() 
-    : MOSDFastDispatchOp(MSG_OSD_REPOPREPLY, HEAD_VERSION, COMPAT_VERSION),
+    : MOSDFastDispatchOp{MSG_OSD_REPOPREPLY, HEAD_VERSION, COMPAT_VERSION},
       map_epoch(0),
       min_epoch(0),
       ack_type(0), result(0),
@@ -137,9 +139,9 @@ private:
   ~MOSDRepOpReply() override {}
 
 public:
-  const char *get_type_name() const override { return "osd_repop_reply"; }
+  std::string_view get_type_name() const override { return "osd_repop_reply"; }
 
-  void print(ostream& out) const override {
+  void print(std::ostream& out) const override {
     out << "osd_repop_reply(" << reqid
         << " " << pgid << " e" << map_epoch << "/" << min_epoch;
     if (!final_decode_needed) {
@@ -154,7 +156,9 @@ public:
     out << ")";
   }
 
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
-
 
 #endif

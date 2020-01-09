@@ -13,77 +13,26 @@
 #
 
 #
-# Return MAX(1, (number of processors / 2)) by default or NPROC
+# To just look at what this script will do, run it like this:
 #
-function get_processors() {
-    if test -n "$NPROC" ; then
-        echo $NPROC
-    else
-        if test $(nproc) -ge 2 ; then
-            expr $(nproc) / 2
-        else
-            echo 1
-        fi
-    fi
-}
+# $ DRY_RUN=echo ./run-make-check.sh
+#
+
+source src/script/run-make.sh
 
 function run() {
-    local install_cmd
-    local which_pkg="which"
-    source /etc/os-release
-    if test -f /etc/redhat-release ; then
-        if ! type bc > /dev/null 2>&1 ; then
-            echo "Please install bc and re-run." 
-            exit 1
-        fi
-        if test "$(echo "$VERSION_ID >= 22" | bc)" -ne 0; then
-            install_cmd="dnf -y install"
-        else
-            install_cmd="yum install -y"
-        fi
-    elif type zypper > /dev/null 2>&1 ; then
-        install_cmd="zypper --gpg-auto-import-keys --non-interactive install --no-recommends"
-    elif type apt-get > /dev/null 2>&1 ; then
-        install_cmd="apt-get install -y"
-        which_pkg="debianutils"
-    fi
-
-    if ! type sudo > /dev/null 2>&1 ; then
-        echo "Please install sudo and re-run. This script assumes it is running"
-        echo "as a normal user with the ability to run commands as root via sudo." 
-        exit 1
-    fi
-    if [ -n "$install_cmd" ]; then
-        $DRY_RUN sudo $install_cmd ccache jq $which_pkg
-    else
-        echo "WARNING: Don't know how to install packages" >&2
-        echo "This probably means distribution $ID is not supported by run-make-check.sh" >&2
-    fi
-
-    if test -f ./install-deps.sh ; then
-	$DRY_RUN source ./install-deps.sh || return 1
-    fi
-
-    # Init defaults after deps are installed. get_processors() depends on coreutils nproc.
-    DEFAULT_MAKEOPTS=${DEFAULT_MAKEOPTS:--j$(get_processors)}
-    BUILD_MAKEOPTS=${BUILD_MAKEOPTS:-$DEFAULT_MAKEOPTS}
-    CHECK_MAKEOPTS=${CHECK_MAKEOPTS:-$DEFAULT_MAKEOPTS}
-
-    CMAKE_PYTHON_OPTS=
-    if ! type python2 > /dev/null 2>&1 ; then
-        CMAKE_PYTHON_OPTS="-DWITH_PYTHON2=OFF -DWITH_PYTHON3=ON -DMGR_PYTHON_VERSION=3"
-    fi
-
-    $DRY_RUN ./do_cmake.sh -DWITH_FIO=ON -DWITH_GTEST_PARALLEL=ON $CMAKE_PYTHON_OPTS $@ || return 1
-    $DRY_RUN cd build
-    $DRY_RUN make $BUILD_MAKEOPTS tests || return 1
-    # prevent OSD EMFILE death on tests, make sure large than 1024
+    # to prevent OSD EMFILE death on tests, make sure ulimit >= 1024
     $DRY_RUN ulimit -n $(ulimit -Hn)
     if [ $(ulimit -n) -lt 1024 ];then
         echo "***ulimit -n too small, better bigger than 1024 for test***"
         return 1
     fi
- 
+
+    # increase the aio-max-nr, which is by default 65536. we could reach this
+    # limit while running seastar tests and bluestore tests.
+    $DRY_RUN sudo /sbin/sysctl -q -w fs.aio-max-nr=$((65536 * 16))
+
+    CHECK_MAKEOPTS=${CHECK_MAKEOPTS:-$DEFAULT_MAKEOPTS}
     if ! $DRY_RUN ctest $CHECK_MAKEOPTS --output-on-failure; then
         rm -fr ${TMPDIR:-/tmp}/ceph-asok.*
         return 1
@@ -96,21 +45,18 @@ function main() {
         echo "with the ability to run commands as root via sudo."
     fi
     echo -n "Checking hostname sanity... "
-    if hostname --fqdn >/dev/null 2>&1 ; then
+    if $DRY_RUN hostname --fqdn >/dev/null 2>&1 ; then
         echo "OK"
     else
         echo "NOT OK"
         echo "Please fix 'hostname --fqdn', otherwise 'make check' will fail"
         return 1
     fi
-    if run "$@" ; then
-        rm -fr ${CEPH_BUILD_VIRTUALENV:-/tmp}/*virtualenv*
-        echo "cmake check: successful run on $(git rev-parse HEAD)"
-        return 0
-    else
-        rm -fr ${CEPH_BUILD_VIRTUALENV:-/tmp}/*virtualenv*
-        return 1
-    fi
+    FOR_MAKE_CHECK=1 prepare
+    # Init defaults after deps are installed.
+    configure " -DWITH_PYTHON3=3 -DWITH_GTEST_PARALLEL=ON -DWITH_FIO=ON -DWITH_SEASTAR=ON -DWITH_CEPHFS_SHELL=ON -DWITH_SPDK=ON -DENABLE_GIT_VERSION=OFF $@"
+    build tests && echo "make check: successful run on $(git rev-parse HEAD)"
+    run
 }
 
 main "$@"

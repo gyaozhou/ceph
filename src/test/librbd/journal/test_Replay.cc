@@ -14,6 +14,7 @@
 #include "librbd/internal.h"
 #include "librbd/Journal.h"
 #include "librbd/Operations.h"
+#include "librbd/api/Snapshot.h"
 #include "librbd/io/AioCompletion.h"
 #include "librbd/io/ImageDispatchSpec.h"
 #include "librbd/io/ImageRequest.h"
@@ -30,7 +31,7 @@ public:
   int when_acquired_lock(librbd::ImageCtx *ictx) {
     C_SaferCond lock_ctx;
     {
-      RWLock::WLocker owner_locker(ictx->owner_lock);
+      std::unique_lock owner_locker{ictx->owner_lock};
       ictx->exclusive_lock->acquire_lock(&lock_ctx);
     }
     int r = lock_ctx.wait();
@@ -48,7 +49,7 @@ public:
     C_SaferCond ctx;
     librbd::journal::EventEntry event_entry(event);
     {
-      RWLock::RLocker owner_locker(ictx->owner_lock);
+      std::shared_lock owner_locker{ictx->owner_lock};
       uint64_t tid = ictx->journal->append_io_event(std::move(event_entry),0, 0,
                                                     true, 0);
       ictx->journal->wait_event(tid, &ctx);
@@ -65,7 +66,8 @@ public:
     C_SaferCond close_cond;
     ictx->journal->close(&close_cond);
     ASSERT_EQ(0, close_cond.wait());
-    delete ictx->journal;
+
+    ictx->journal->put();
     ictx->journal = nullptr;
 
     C_SaferCond cond;
@@ -142,8 +144,8 @@ TEST_F(TestJournalReplay, AioDiscardEvent) {
 
   // inject a discard operation into the journal
   inject_into_journal(ictx,
-                      librbd::journal::AioDiscardEvent(0, payload.size(),
-                                                       ictx->skip_partial_discard));
+                      librbd::journal::AioDiscardEvent(
+                        0, payload.size(), ictx->discard_granularity_bytes));
   close_image(ictx);
 
   // re-open the journal so that it replays the new entry
@@ -155,7 +157,7 @@ TEST_F(TestJournalReplay, AioDiscardEvent) {
                                 librbd::io::ReadResult{read_result}, 0);
   ASSERT_EQ(0, aio_comp->wait_for_complete());
   aio_comp->release();
-  if (ictx->skip_partial_discard) {
+  if (ictx->discard_granularity_bytes > 0) {
     ASSERT_EQ(payload, read_payload);
   } else {
     ASSERT_EQ(std::string(read_payload.size(), '\0'), read_payload);
@@ -170,11 +172,11 @@ TEST_F(TestJournalReplay, AioDiscardEvent) {
 
   // replay several envents and check the commit position
   inject_into_journal(ictx,
-                      librbd::journal::AioDiscardEvent(0, payload.size(),
-                                                       ictx->skip_partial_discard));
+                      librbd::journal::AioDiscardEvent(
+                        0, payload.size(), ictx->discard_granularity_bytes));
   inject_into_journal(ictx,
-                      librbd::journal::AioDiscardEvent(0, payload.size(),
-                                                       ictx->skip_partial_discard));
+                      librbd::journal::AioDiscardEvent(
+                        0, payload.size(), ictx->discard_granularity_bytes));
   close_image(ictx);
 
   ASSERT_EQ(0, open_image(m_image_name, &ictx));
@@ -186,7 +188,7 @@ TEST_F(TestJournalReplay, AioDiscardEvent) {
   // verify lock ordering constraints
   aio_comp = new librbd::io::AioCompletion();
   ictx->io_work_queue->aio_discard(aio_comp, 0, read_payload.size(),
-                                   ictx->skip_partial_discard);
+                                   ictx->discard_granularity_bytes);
   ASSERT_EQ(0, aio_comp->wait_for_complete());
   aio_comp->release();
 }
@@ -328,7 +330,7 @@ TEST_F(TestJournalReplay, SnapCreate) {
   ASSERT_EQ(1, current_entry);
 
   {
-    RWLock::RLocker snap_locker(ictx->snap_lock);
+    std::shared_lock image_locker{ictx->image_lock};
     ASSERT_NE(CEPH_NOSNAP, ictx->get_snap_id(cls::rbd::UserSnapshotNamespace(),
 					     "snap"));
   }
@@ -373,7 +375,7 @@ TEST_F(TestJournalReplay, SnapProtect) {
   ASSERT_EQ(initial_entry + 2, current_entry);
 
   bool is_protected;
-  ASSERT_EQ(0, librbd::snap_is_protected(ictx, "snap", &is_protected));
+  ASSERT_EQ(0, librbd::api::Snapshot<>::is_protected(ictx, "snap", &is_protected));
   ASSERT_TRUE(is_protected);
 
   // verify lock ordering constraints
@@ -395,7 +397,7 @@ TEST_F(TestJournalReplay, SnapUnprotect) {
 					     "snap"));
   uint64_t snap_id;
   {
-    RWLock::RLocker snap_locker(ictx->snap_lock);
+    std::shared_lock image_locker{ictx->image_lock};
     snap_id = ictx->get_snap_id(cls::rbd::UserSnapshotNamespace(), "snap");
     ASSERT_NE(CEPH_NOSNAP, snap_id);
   }
@@ -426,7 +428,7 @@ TEST_F(TestJournalReplay, SnapUnprotect) {
   ASSERT_EQ(initial_entry + 2, current_entry);
 
   bool is_protected;
-  ASSERT_EQ(0, librbd::snap_is_protected(ictx, "snap", &is_protected));
+  ASSERT_EQ(0, librbd::api::Snapshot<>::is_protected(ictx, "snap", &is_protected));
   ASSERT_FALSE(is_protected);
 
   // verify lock ordering constraints
@@ -450,7 +452,7 @@ TEST_F(TestJournalReplay, SnapRename) {
 					     "snap"));
   uint64_t snap_id;
   {
-    RWLock::RLocker snap_locker(ictx->snap_lock);
+    std::shared_lock image_locker{ictx->image_lock};
     snap_id = ictx->get_snap_id(cls::rbd::UserSnapshotNamespace(), "snap");
     ASSERT_NE(CEPH_NOSNAP, snap_id);
   }
@@ -478,7 +480,7 @@ TEST_F(TestJournalReplay, SnapRename) {
   ASSERT_EQ(0, ictx->state->refresh());
 
   {
-    RWLock::RLocker snap_locker(ictx->snap_lock);
+    std::shared_lock image_locker{ictx->image_lock};
     snap_id = ictx->get_snap_id(cls::rbd::UserSnapshotNamespace(), "snap2");
     ASSERT_NE(CEPH_NOSNAP, snap_id);
   }
@@ -563,7 +565,7 @@ TEST_F(TestJournalReplay, SnapRemove) {
   ASSERT_EQ(initial_entry + 2, current_entry);
 
   {
-    RWLock::RLocker snap_locker(ictx->snap_lock);
+    std::shared_lock image_locker{ictx->image_lock};
     uint64_t snap_id = ictx->get_snap_id(cls::rbd::UserSnapshotNamespace(),
 					 "snap");
     ASSERT_EQ(CEPH_NOSNAP, snap_id);
@@ -755,7 +757,7 @@ TEST_F(TestJournalReplay, MetadataSet) {
   ASSERT_EQ(initial_tag + 1, current_tag);
   ASSERT_EQ(1, current_entry);
 
-  ASSERT_EQ(9876, ictx->mirroring_replay_delay);
+  ASSERT_EQ(9876U, ictx->mirroring_replay_delay);
 
   std::string value;
   ASSERT_EQ(0, librbd::metadata_get(ictx, "conf_rbd_mirroring_replay_delay",
@@ -797,7 +799,7 @@ TEST_F(TestJournalReplay, MetadataRemove) {
   get_journal_commit_position(ictx, &current_tag, &current_entry);
   ASSERT_EQ(initial_tag, current_tag);
   ASSERT_EQ(initial_entry + 2, current_entry);
-  ASSERT_EQ(0, ictx->mirroring_replay_delay);
+  ASSERT_EQ(0U, ictx->mirroring_replay_delay);
 
   std::string value;
   ASSERT_EQ(-ENOENT,
@@ -857,7 +859,7 @@ TEST_F(TestJournalReplay, ObjectPosition) {
 
   // user flush requests are ignored when journaling + cache are enabled
   C_SaferCond flush_ctx;
-  aio_comp = librbd::io::AioCompletion::create(
+  aio_comp = librbd::io::AioCompletion::create_and_start(
     &flush_ctx, ictx, librbd::io::AIO_TYPE_FLUSH);
   auto req = librbd::io::ImageDispatchSpec<>::create_flush_request(
     *ictx, aio_comp, librbd::io::FLUSH_SOURCE_INTERNAL, {});

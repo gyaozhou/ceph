@@ -11,7 +11,7 @@
  * Foundation.  See file COPYING.
  * 
  */
-
+#include <memory>
 #include "common/errno.h"
 #include "osdc/Journaler.h"
 #include "mds/JournalPointer.h"
@@ -35,7 +35,7 @@ int Resetter::init(mds_role_t role_, const std::string &type, bool hard)
   }
 
   auto fs = fsmap->get_filesystem(role.fscid);
-  assert(nullptr != fs);
+  ceph_assert(nullptr != fs);
 
   is_mdlog = false;
   if (type == "mdlog") {
@@ -71,28 +71,26 @@ int Resetter::init(mds_role_t role_, const std::string &type, bool hard)
 
 int Resetter::reset()
 {
-  Mutex mylock("Resetter::reset::lock");
-  Cond cond;
+  ceph::mutex mylock = ceph::make_mutex("Resetter::reset::lock");
+  ceph::condition_variable cond;
   bool done;
   int r;
 
   auto fs =  fsmap->get_filesystem(role.fscid);
-  assert(fs != nullptr);
+  ceph_assert(fs != nullptr);
 
   Journaler journaler("resetter", ino,
       fs->mds_map.get_metadata_pool(),
       CEPH_FS_ONDISK_MAGIC,
       objecter, 0, 0, &finisher);
-
-  lock.Lock();
-  journaler.recover(new C_SafeCond(&mylock, &cond, &done, &r));
-  lock.Unlock();
-
-  mylock.Lock();
-  while (!done)
-    cond.Wait(mylock);
-  mylock.Unlock();
-
+  {
+    std::lock_guard locker{lock};
+    journaler.recover(new C_SafeCond(mylock, cond, &done, &r));
+  }
+  {
+    std::unique_lock locker{mylock};
+    cond.wait(locker, [&done] { return done; });
+  }
   if (r != 0) {
     if (r == -ENOENT) {
       cerr << "journal does not exist on-disk. Did you set a bad rank?"
@@ -106,7 +104,7 @@ int Resetter::reset()
     }
   }
 
-  lock.Lock();
+  lock.lock();
   uint64_t old_start = journaler.get_read_pos();
   uint64_t old_end = journaler.get_write_pos();
   uint64_t old_len = old_end - old_start;
@@ -123,15 +121,13 @@ int Resetter::reset()
   journaler.set_writeable();
 
   cout << "writing journal head" << std::endl;
-  journaler.write_head(new C_SafeCond(&mylock, &cond, &done, &r));
-  lock.Unlock();
-
-  mylock.Lock();
-  while (!done)
-    cond.Wait(mylock);
-  mylock.Unlock();
-
-  Mutex::Locker l(lock);
+  journaler.write_head(new C_SafeCond(mylock, cond, &done, &r));
+  lock.unlock();
+  {
+    std::unique_lock locker{mylock};
+    cond.wait(locker, [&done] { return done; });
+  }
+  std::lock_guard l{lock};
   if (r != 0) {
     return r;
   }
@@ -159,11 +155,11 @@ int Resetter::reset_hard()
 
   file_layout_t default_log_layout = MDCache::gen_default_log_layout(
       fsmap->get_filesystem(role.fscid)->mds_map);
-  journaler.create(&default_log_layout, g_conf->mds_journal_format);
+  journaler.create(&default_log_layout, g_conf()->mds_journal_format);
 
   C_SaferCond cond;
   {
-    Mutex::Locker l(lock);
+    std::lock_guard l{lock};
     journaler.write_head(&cond);
   }
   
@@ -175,7 +171,7 @@ int Resetter::reset_hard()
   
   if (is_mdlog) // reset event is specific for mdlog journal
   {
-    Mutex::Locker l(lock);
+    std::lock_guard l{lock};
     r = _write_reset_event(&journaler);
     if (r != 0) {
       derr << "Error writing EResetJournal: " << cpp_strerror(r) << dendl;
@@ -194,9 +190,9 @@ int Resetter::reset_hard()
 
 int Resetter::_write_reset_event(Journaler *journaler)
 {
-  assert(journaler != NULL);
+  ceph_assert(journaler != NULL);
 
-  LogEvent *le = new EResetJournal;
+  auto le = std::make_unique<EResetJournal>();
 
   bufferlist bl;
   le->encode_with_header(bl, CEPH_FEATURES_SUPPORTED_DEFAULT);

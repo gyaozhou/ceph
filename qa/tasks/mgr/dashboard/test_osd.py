@@ -11,6 +11,9 @@ class OsdTest(DashboardTestCase):
 
     AUTH_ROLES = ['cluster-manager']
 
+    def tearDown(self):
+        self._post('/api/osd/0/mark_in')
+
     @DashboardTestCase.RunAs('test', 'test', ['block-manager'])
     def test_access_permissions(self):
         self._get('/api/osd')
@@ -34,7 +37,7 @@ class OsdTest(DashboardTestCase):
                                                     'op_r', 'op_w'])
         self.assert_in_and_not_none(data['stats_history'], ['op_out_bytes', 'op_in_bytes'])
         self.assertSchema(data['stats_history']['op_out_bytes'],
-                          JList(JTuple([JLeaf(int), JLeaf(float)])))
+                          JList(JTuple([JLeaf(float), JLeaf(float)])))
 
     def test_details(self):
         data = self._get('/api/osd/0')
@@ -51,12 +54,106 @@ class OsdTest(DashboardTestCase):
         self._post('/api/osd/0/scrub?deep=True')
         self.assertStatus(200)
 
+    def test_mark_out_and_in(self):
+        self._post('/api/osd/0/mark_out')
+        self.assertStatus(200)
+
+        self._post('/api/osd/0/mark_in')
+        self.assertStatus(200)
+
+    def test_mark_down(self):
+        self._post('/api/osd/0/mark_down')
+        self.assertStatus(200)
+
+    def test_reweight(self):
+        self._post('/api/osd/0/reweight', {'weight': 0.4})
+        self.assertStatus(200)
+
+        def get_reweight_value():
+            self._get('/api/osd/0')
+            response = self.jsonBody()
+            if 'osd_map' in response and 'weight' in response['osd_map']:
+                return round(response['osd_map']['weight'], 1)
+        self.wait_until_equal(get_reweight_value, 0.4, 10)
+        self.assertStatus(200)
+
+        # Undo
+        self._post('/api/osd/0/reweight', {'weight': 1})
+
+    def test_create_lost_destroy_remove(self):
+        # Create
+        self._post('/api/osd', {
+            'uuid': 'f860ca2e-757d-48ce-b74a-87052cad563f',
+            'svc_id': 5
+        })
+        self.assertStatus(201)
+        # Lost
+        self._post('/api/osd/5/mark_lost')
+        self.assertStatus(200)
+        # Destroy
+        self._post('/api/osd/5/destroy')
+        self.assertStatus(200)
+        # Purge
+        self._post('/api/osd/5/purge')
+        self.assertStatus(200)
+
+    def test_safe_to_destroy(self):
+        osd_dump = json.loads(self._ceph_cmd(['osd', 'dump', '-f', 'json']))
+        max_id = max(map(lambda e: e['osd'], osd_dump['osds']))
+
+        # 1 OSD safe to destroy
+        unused_osd_id = max_id + 10
+        self._get('/api/osd/safe_to_destroy?ids={}'.format(unused_osd_id))
+        self.assertStatus(200)
+        self.assertJsonBody({
+            'is_safe_to_destroy': True,
+            'active': [],
+            'missing_stats': [],
+            'safe_to_destroy': [unused_osd_id],
+            'stored_pgs': [],
+        })
+
+        # multiple OSDs safe to destroy
+        unused_osd_ids = [max_id + 11, max_id + 12]
+        self._get('/api/osd/safe_to_destroy?ids={}'.format(str(unused_osd_ids)))
+        self.assertStatus(200)
+        self.assertJsonBody({
+            'is_safe_to_destroy': True,
+            'active': [],
+            'missing_stats': [],
+            'safe_to_destroy': unused_osd_ids,
+            'stored_pgs': [],
+        })
+
+        # 1 OSD unsafe to destroy
+        def get_destroy_status():
+            self._get('/api/osd/safe_to_destroy?ids=0')
+            if 'is_safe_to_destroy' in self.jsonBody():
+                return self.jsonBody()['is_safe_to_destroy']
+            return None
+        self.wait_until_equal(get_destroy_status, False, 10)
+        self.assertStatus(200)
+
+    def test_osd_devices(self):
+        data = self._get('/api/osd/0/devices')
+        self.assertStatus(200)
+        self.assertSchema(data, JList(JObj({
+            'daemons': JList(str),
+            'devid': str,
+            'location': JList(JObj({
+                'host': str,
+                'dev': str,
+                'path': str
+            }))
+        })))
+
 
 class OsdFlagsTest(DashboardTestCase):
     def __init__(self, *args, **kwargs):
         super(OsdFlagsTest, self).__init__(*args, **kwargs)
         self._initial_flags = sorted(  # These flags cannot be unset
-            ['sortbitwise', 'recovery_deletes', 'purged_snapdirs'])
+            ['sortbitwise', 'recovery_deletes', 'purged_snapdirs',
+             'pglog_hardlimit'])
 
     @classmethod
     def _get_cluster_osd_flags(cls):
@@ -72,17 +169,17 @@ class OsdFlagsTest(DashboardTestCase):
     def test_list_osd_flags(self):
         flags = self._get('/api/osd/flags')
         self.assertStatus(200)
-        self.assertEqual(len(flags), 3)
+        self.assertEqual(len(flags), 4)
         self.assertEqual(sorted(flags), self._initial_flags)
 
     def test_add_osd_flag(self):
         flags = self._put_flags([
             'sortbitwise', 'recovery_deletes', 'purged_snapdirs', 'noout',
-            'pause'
+            'pause', 'pglog_hardlimit'
         ])
         self.assertEqual(flags, sorted([
             'sortbitwise', 'recovery_deletes', 'purged_snapdirs', 'noout',
-            'pause'
+            'pause', 'pglog_hardlimit'
         ]))
 
         # Restore flags

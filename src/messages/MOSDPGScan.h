@@ -18,9 +18,9 @@
 #include "MOSDFastDispatchOp.h"
 
 class MOSDPGScan : public MOSDFastDispatchOp {
-
-  static const int HEAD_VERSION = 2;
-  static const int COMPAT_VERSION = 2;
+private:
+  static constexpr int HEAD_VERSION = 2;
+  static constexpr int COMPAT_VERSION = 2;
 
 public:
   enum {
@@ -88,10 +88,10 @@ public:
   }
 
   MOSDPGScan()
-    : MOSDFastDispatchOp(MSG_OSD_PG_SCAN, HEAD_VERSION, COMPAT_VERSION) {}
+    : MOSDFastDispatchOp{MSG_OSD_PG_SCAN, HEAD_VERSION, COMPAT_VERSION} {}
   MOSDPGScan(__u32 o, pg_shard_t from,
 	     epoch_t e, epoch_t qe, spg_t p, hobject_t be, hobject_t en)
-    : MOSDFastDispatchOp(MSG_OSD_PG_SCAN, HEAD_VERSION, COMPAT_VERSION),
+    : MOSDFastDispatchOp{MSG_OSD_PG_SCAN, HEAD_VERSION, COMPAT_VERSION},
       op(o),
       map_epoch(e), query_epoch(qe),
       from(from),
@@ -102,7 +102,7 @@ private:
   ~MOSDPGScan() override {}
 
 public:
-  const char *get_type_name() const override { return "pg_scan"; }
+  std::string_view get_type_name() const override { return "pg_scan"; }
   void print(ostream& out) const override {
     out << "pg_scan(" << get_op_name(op)
 	<< " " << pgid
@@ -110,6 +110,9 @@ public:
 	<< " e " << map_epoch << "/" << query_epoch
 	<< ")";
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

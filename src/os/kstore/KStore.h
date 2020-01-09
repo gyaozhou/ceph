@@ -23,7 +23,7 @@
 #include <mutex>
 #include <condition_variable>
 
-#include "include/assert.h"
+#include "include/ceph_assert.h"
 #include "include/unordered_map.h"
 #include "common/Finisher.h"
 #include "common/RWLock.h"
@@ -136,7 +136,8 @@ public:
   struct Collection : public CollectionImpl {
     KStore *store;
     kstore_cnode_t cnode;
-    RWLock lock;
+    ceph::shared_mutex lock =
+      ceph::make_shared_mutex("KStore::Collection::lock", true, false);
 
     OpSequencerRef osr;
 
@@ -160,9 +161,11 @@ public:
     void flush() override;
     bool flush_commit(Context *c) override;
 
+  private:
+    FRIEND_MAKE_REF(Collection);
     Collection(KStore *ns, coll_t c);
   };
-  typedef boost::intrusive_ptr<Collection> CollectionRef;
+  using CollectionRef = ceph::ref_t<Collection>;
 
   class OmapIteratorImpl : public ObjectMap::ObjectMapIteratorImpl {
     CollectionRef c;
@@ -175,7 +178,7 @@ public:
     int upper_bound(const string &after) override;
     int lower_bound(const string &to) override;
     bool valid() override;
-    int next(bool validate=true) override;
+    int next() override;
     string key() override;
     bufferlist value() override;
     int status() override {
@@ -267,7 +270,7 @@ public:
     q_list_t q;  ///< transactions
 
     ~OpSequencer() {
-      assert(q.empty());
+      ceph_assert(q.empty());
     }
 
     void queue_new(TransContext *txc) {
@@ -290,7 +293,7 @@ public:
       if (txc->state >= TransContext::STATE_KV_DONE) {
 	return true;
       }
-      assert(txc->state < TransContext::STATE_KV_DONE);
+      ceph_assert(txc->state < TransContext::STATE_KV_DONE);
       txc->oncommits.push_back(c);
       return false;
     }
@@ -315,7 +318,8 @@ private:
   int fsid_fd;  ///< open handle (locked) to $path/fsid
   bool mounted;
 
-  RWLock coll_lock;    ///< rwlock to protect coll_map
+  /// rwlock to protect coll_map
+  ceph::shared_mutex coll_lock = ceph::make_shared_mutex("KStore::coll_lock");
   ceph::unordered_map<coll_t, CollectionRef> coll_map;
   map<coll_t,CollectionRef> new_coll_map;
 
@@ -439,10 +443,16 @@ public:
   void get_db_statistics(Formatter *f) override {
     db->get_statistics(f);
   }
-  int statfs(struct store_statfs_t *buf) override;
+  int statfs(struct store_statfs_t *buf,
+             osd_alert_list_t* alerts = nullptr) override;
+  int pool_statfs(uint64_t pool_id, struct store_statfs_t *buf,
+		  bool *per_pool_omap) override;
 
   CollectionHandle open_collection(const coll_t& c) override;
   CollectionHandle create_new_collection(const coll_t& c) override;
+  void set_collection_commit_queue(const coll_t& cid,
+				   ContextQueue *commit_queue) override {
+  }
 
   using ObjectStore::exists;
   bool exists(CollectionHandle& c, const ghobject_t& oid) override;
@@ -562,7 +572,7 @@ public:
     ThreadPool::TPHandle *handle = NULL) override;
 
   void compact () override {
-    assert(db);
+    ceph_assert(db);
     db->compact();
   }
   
@@ -663,6 +673,10 @@ private:
 			CollectionRef& c,
 			CollectionRef& d,
 			unsigned bits, int rem);
+  int _merge_collection(TransContext *txc,
+			CollectionRef *c,
+			CollectionRef& d,
+			unsigned bits);
 
 };
 

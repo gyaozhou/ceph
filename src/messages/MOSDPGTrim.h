@@ -17,11 +17,12 @@
 
 #include "msg/Message.h"
 #include "messages/MOSDPeeringOp.h"
+#include "osd/PGPeeringEvent.h"
 
 class MOSDPGTrim : public MOSDPeeringOp {
-
-  static const int HEAD_VERSION = 2;
-  static const int COMPAT_VERSION = 2;
+private:
+  static constexpr int HEAD_VERSION = 2;
+  static constexpr int COMPAT_VERSION = 2;
 
 public:
   epoch_t epoch = 0;
@@ -45,15 +46,15 @@ public:
       MTrim(epoch, get_source().num(), pgid.shard, trim_to));
   }
 
-  MOSDPGTrim() : MOSDPeeringOp(MSG_OSD_PG_TRIM, HEAD_VERSION, COMPAT_VERSION) {}
+  MOSDPGTrim() : MOSDPeeringOp{MSG_OSD_PG_TRIM, HEAD_VERSION, COMPAT_VERSION} {}
   MOSDPGTrim(version_t mv, spg_t p, eversion_t tt) :
-    MOSDPeeringOp(MSG_OSD_PG_TRIM, HEAD_VERSION, COMPAT_VERSION),
+    MOSDPeeringOp{MSG_OSD_PG_TRIM, HEAD_VERSION, COMPAT_VERSION},
     epoch(mv), pgid(p), trim_to(tt) { }
 private:
   ~MOSDPGTrim() override {}
 
 public:
-  const char *get_type_name() const override { return "pg_trim"; }
+  std::string_view get_type_name() const override { return "pg_trim"; }
   void inner_print(ostream& out) const override {
     out << trim_to;
   }
@@ -72,6 +73,9 @@ public:
     decode(trim_to, p);
     decode(pgid.shard, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

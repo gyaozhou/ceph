@@ -23,7 +23,10 @@ import sys
 import threading
 import time
 
-from collections import Callable
+try:
+    from collections.abc import Callable
+except ImportError:
+    from collections import Callable
 from datetime import datetime
 from functools import partial, wraps
 from itertools import chain
@@ -85,9 +88,6 @@ cdef extern from "rados/librados.h" nogil:
 
     cdef uint64_t _LIBRADOS_SNAP_HEAD "LIBRADOS_SNAP_HEAD"
 
-    ctypedef void* rados_t
-    ctypedef void* rados_config_t
-    ctypedef void* rados_ioctx_t
     ctypedef void* rados_xattrs_iter_t
     ctypedef void* rados_omap_iter_t
     ctypedef void* rados_list_ctx_t
@@ -130,6 +130,7 @@ cdef extern from "rados/librados.h" nogil:
     int rados_create_with_context(rados_t *cluster, rados_config_t cct)
     int rados_connect(rados_t cluster)
     void rados_shutdown(rados_t cluster)
+    uint64_t rados_get_instance_id(rados_t cluster)
     int rados_conf_read_file(rados_t cluster, const char *path)
     int rados_conf_parse_argv_remainder(rados_t cluster, int argc, const char **argv, const char **remargv)
     int rados_conf_parse_env(rados_t cluster, const char *var)
@@ -140,8 +141,8 @@ cdef extern from "rados/librados.h" nogil:
     int64_t rados_pool_lookup(rados_t cluster, const char *pool_name)
     int rados_pool_reverse_lookup(rados_t cluster, int64_t id, char *buf, size_t maxlen)
     int rados_pool_create(rados_t cluster, const char *pool_name)
-    int rados_pool_create_with_auid(rados_t cluster, const char *pool_name, uint64_t auid)
     int rados_pool_create_with_crush_rule(rados_t cluster, const char *pool_name, uint8_t crush_rule_num)
+    int rados_pool_create_with_auid(rados_t cluster, const char *pool_name, uint64_t auid)
     int rados_pool_create_with_all(rados_t cluster, const char *pool_name, uint64_t auid, uint8_t crush_rule_num)
     int rados_pool_get_base_tier(rados_t cluster, int64_t pool, int64_t *base_tier)
     int rados_pool_list(rados_t cluster, char *buf, size_t len)
@@ -151,6 +152,7 @@ cdef extern from "rados/librados.h" nogil:
     int rados_cluster_stat(rados_t cluster, rados_cluster_stat_t *result)
     int rados_cluster_fsid(rados_t cluster, char *buf, size_t len)
     int rados_blacklist_add(rados_t cluster, char *client_address, uint32_t expire_seconds)
+    int rados_getaddrs(rados_t cluster, char** addrs)
     int rados_application_enable(rados_ioctx_t io, const char *app_name,
                                  int force)
     void rados_set_osdmap_full_try(rados_ioctx_t io)
@@ -177,6 +179,12 @@ cdef extern from "rados/librados.h" nogil:
                           const char *inbuf, size_t inbuflen,
                           char **outbuf, size_t *outbuflen,
                           char **outs, size_t *outslen)
+    int rados_mgr_command_target(rados_t cluster,
+                          const char *name,
+			  const char **cmd, size_t cmdlen,
+                          const char *inbuf, size_t inbuflen,
+                          char **outbuf, size_t *outbuflen,
+                          char **outs, size_t *outslen)
     int rados_mon_command_target(rados_t cluster, const char *name, const char **cmd, size_t cmdlen,
                                  const char *inbuf, size_t inbuflen,
                                  char **outbuf, size_t *outbuflen,
@@ -200,7 +208,6 @@ cdef extern from "rados/librados.h" nogil:
     int rados_ioctx_create(rados_t cluster, const char *pool_name, rados_ioctx_t *ioctx)
     int rados_ioctx_create2(rados_t cluster, int64_t pool_id, rados_ioctx_t *ioctx)
     void rados_ioctx_destroy(rados_ioctx_t io)
-    int rados_ioctx_pool_set_auid(rados_ioctx_t io, uint64_t auid)
     void rados_ioctx_locator_set_key(rados_ioctx_t io, const char *key)
     void rados_ioctx_set_namespace(rados_ioctx_t io, const char * nspace)
 
@@ -208,6 +215,7 @@ cdef extern from "rados/librados.h" nogil:
     int rados_stat(rados_ioctx_t io, const char *o, uint64_t *psize, time_t *pmtime)
     int rados_write(rados_ioctx_t io, const char *oid, const char *buf, size_t len, uint64_t off)
     int rados_write_full(rados_ioctx_t io, const char *oid, const char *buf, size_t len)
+    int rados_writesame(rados_ioctx_t io, const char *oid, const char *buf, size_t data_len, size_t write_len, uint64_t off)
     int rados_append(rados_ioctx_t io, const char *oid, const char *buf, size_t len)
     int rados_read(rados_ioctx_t io, const char *oid, char *buf, size_t len, uint64_t off)
     int rados_remove(rados_ioctx_t io, const char *oid)
@@ -234,6 +242,19 @@ cdef extern from "rados/librados.h" nogil:
     void rados_ioctx_snap_set_read(rados_ioctx_t io, rados_snap_t snap)
     int rados_ioctx_snap_list(rados_ioctx_t io, rados_snap_t * snaps, int maxlen)
     int rados_ioctx_snap_get_stamp(rados_ioctx_t io, rados_snap_t id, time_t * t)
+    uint64_t rados_ioctx_get_id(rados_ioctx_t io)
+    int rados_ioctx_get_pool_name(rados_ioctx_t io, char *buf, unsigned maxlen)
+
+    int rados_ioctx_selfmanaged_snap_create(rados_ioctx_t io,
+                                            rados_snap_t *snapid)
+    int rados_ioctx_selfmanaged_snap_remove(rados_ioctx_t io,
+                                            rados_snap_t snapid)
+    int rados_ioctx_selfmanaged_snap_set_write_ctx(rados_ioctx_t io,
+                                                   rados_snap_t snap_seq,
+                                                   rados_snap_t *snap,
+                                                   int num_snaps)
+    int rados_ioctx_selfmanaged_snap_rollback(rados_ioctx_t io, const char *oid,
+                                              rados_snap_t snapid)
 
     int rados_lock_exclusive(rados_ioctx_t io, const char * oid, const char * name,
                              const char * cookie, const char * desc,
@@ -249,23 +270,21 @@ cdef extern from "rados/librados.h" nogil:
     rados_read_op_t rados_create_read_op()
     void rados_release_read_op(rados_read_op_t read_op)
 
-    int rados_aio_create_completion(void * cb_arg, rados_callback_t cb_complete, rados_callback_t cb_safe, rados_completion_t * pc)
+    int rados_aio_create_completion2(void * cb_arg, rados_callback_t cb_complete, rados_completion_t * pc)
     void rados_aio_release(rados_completion_t c)
     int rados_aio_stat(rados_ioctx_t io, const char *oid, rados_completion_t completion, uint64_t *psize, time_t *pmtime)
     int rados_aio_write(rados_ioctx_t io, const char * oid, rados_completion_t completion, const char * buf, size_t len, uint64_t off)
     int rados_aio_append(rados_ioctx_t io, const char * oid, rados_completion_t completion, const char * buf, size_t len)
     int rados_aio_write_full(rados_ioctx_t io, const char * oid, rados_completion_t completion, const char * buf, size_t len)
+    int rados_aio_writesame(rados_ioctx_t io, const char *oid, rados_completion_t completion, const char *buf, size_t data_len, size_t write_len, uint64_t off)
     int rados_aio_remove(rados_ioctx_t io, const char * oid, rados_completion_t completion)
     int rados_aio_read(rados_ioctx_t io, const char * oid, rados_completion_t completion, char * buf, size_t len, uint64_t off)
     int rados_aio_flush(rados_ioctx_t io)
 
     int rados_aio_get_return_value(rados_completion_t c)
     int rados_aio_wait_for_complete_and_cb(rados_completion_t c)
-    int rados_aio_wait_for_safe_and_cb(rados_completion_t c)
     int rados_aio_wait_for_complete(rados_completion_t c)
-    int rados_aio_wait_for_safe(rados_completion_t c)
     int rados_aio_is_complete(rados_completion_t c)
-    int rados_aio_is_safe(rados_completion_t c)
 
     int rados_exec(rados_ioctx_t io, const char * oid, const char * cls, const char * method,
                    const char * in_buf, size_t in_len, char * buf, size_t out_len)
@@ -278,15 +297,19 @@ cdef extern from "rados/librados.h" nogil:
     void rados_write_op_omap_rm_keys(rados_write_op_t write_op, const char * const* keys, size_t keys_len)
     void rados_write_op_omap_clear(rados_write_op_t write_op)
     void rados_write_op_set_flags(rados_write_op_t write_op, int flags)
+    void rados_write_op_setxattr(rados_write_op_t write_op, const char *name, const char *value, size_t value_len)
+    void rados_write_op_rmxattr(rados_write_op_t write_op, const char *name)
 
     void rados_write_op_create(rados_write_op_t write_op, int exclusive, const char *category)
     void rados_write_op_append(rados_write_op_t write_op, const char *buffer, size_t len)
     void rados_write_op_write_full(rados_write_op_t write_op, const char *buffer, size_t len)
+    void rados_write_op_assert_version(rados_write_op_t write_op, uint64_t ver)
     void rados_write_op_write(rados_write_op_t write_op, const char *buffer, size_t len, uint64_t offset)
     void rados_write_op_remove(rados_write_op_t write_op)
     void rados_write_op_truncate(rados_write_op_t write_op, uint64_t offset)
     void rados_write_op_zero(rados_write_op_t write_op, uint64_t offset, uint64_t len)
-
+    void rados_write_op_exec(rados_write_op_t write_op, const char *cls, const char *method, const char *in_buf, size_t in_len, int *prval)
+    void rados_write_op_writesame(rados_write_op_t write_op, const char *buffer, size_t data_len, size_t write_len, uint64_t offset)
     void rados_read_op_omap_get_vals2(rados_read_op_t read_op, const char * start_after, const char * filter_prefix, uint64_t max_return, rados_omap_iter_t * iter, unsigned char *pmore, int * prval)
     void rados_read_op_omap_get_keys2(rados_read_op_t read_op, const char * start_after, uint64_t max_return, rados_omap_iter_t * iter, unsigned char *pmore, int * prval)
     void rados_read_op_omap_get_vals_by_keys(rados_read_op_t read_op, const char * const* keys, size_t keys_len, rados_omap_iter_t * iter, int * prval)
@@ -295,6 +318,7 @@ cdef extern from "rados/librados.h" nogil:
     void rados_read_op_set_flags(rados_read_op_t read_op, int flags)
     int rados_omap_get_next(rados_omap_iter_t iter, const char * const* key, const char * const* val, size_t * len)
     void rados_omap_get_end(rados_omap_iter_t iter)
+    int rados_notify2(rados_ioctx_t io, const char * o, const char *buf, int buf_len, uint64_t timeout_ms, char **reply_buffer, size_t *reply_buffer_len)
 
 
 LIBRADOS_OP_FLAG_EXCL = _LIBRADOS_OP_FLAG_EXCL
@@ -340,7 +364,10 @@ class Error(Exception):
         return (self.__class__, (self.message, self.errno))
 
 class InvalidArgumentError(Error):
-    pass
+    def __init__(self, message, errno=None):
+        super(InvalidArgumentError, self).__init__(
+            "RADOS invalid argument (%s)" % message, errno)
+
 
 class OSError(Error):
     """ `OSError` class, derived from `Error` """
@@ -348,72 +375,114 @@ class OSError(Error):
 
 class InterruptedOrTimeoutError(OSError):
     """ `InterruptedOrTimeoutError` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(InterruptedOrTimeoutError, self).__init__(
+            "RADOS interrupted or timeout (%s)" % message, errno)
 
 
 class PermissionError(OSError):
     """ `PermissionError` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(PermissionError, self).__init__(
+            "RADOS permission error (%s)" % message, errno)
 
 
 class PermissionDeniedError(OSError):
     """ deal with EACCES related. """
-    pass
+    def __init__(self, message, errno=None):
+        super(PermissionDeniedError, self).__init__(
+                "RADOS permission denied (%s)" % message, errno)
 
 
 class ObjectNotFound(OSError):
     """ `ObjectNotFound` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(ObjectNotFound, self).__init__(
+                "RADOS object not found (%s)" % message, errno)
 
 
 class NoData(OSError):
     """ `NoData` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(NoData, self).__init__(
+                "RADOS no data (%s)" % message, errno)
 
 
 class ObjectExists(OSError):
     """ `ObjectExists` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(ObjectExists, self).__init__(
+                "RADOS object exists (%s)" % message, errno)
 
 
 class ObjectBusy(OSError):
     """ `ObjectBusy` class, derived from `IOError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(ObjectBusy, self).__init__(
+                "RADOS object busy (%s)" % message, errno)
 
 
 class IOError(OSError):
     """ `ObjectBusy` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(IOError, self).__init__(
+                "RADOS I/O error (%s)" % message, errno)
 
 
 class NoSpace(OSError):
     """ `NoSpace` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(NoSpace, self).__init__(
+                "RADOS no space (%s)" % message, errno)
 
 
 class RadosStateError(Error):
     """ `RadosStateError` class, derived from `Error` """
-    pass
+    def __init__(self, message, errno=None):
+        super(RadosStateError, self).__init__(
+                "RADOS rados state (%s)" % message, errno)
 
 
 class IoctxStateError(Error):
     """ `IoctxStateError` class, derived from `Error` """
-    pass
+    def __init__(self, message, errno=None):
+        super(IoctxStateError, self).__init__(
+                "RADOS Ioctx state error (%s)" % message, errno)
 
 
 class ObjectStateError(Error):
     """ `ObjectStateError` class, derived from `Error` """
-    pass
+    def __init__(self, message, errno=None):
+        super(ObjectStateError, self).__init__(
+                "RADOS object state error (%s)" % message, errno)
 
 
 class LogicError(Error):
     """ `` class, derived from `Error` """
-    pass
+    def __init__(self, message, errno=None):
+        super(LogicError, self).__init__(
+            "RADOS logic error (%s)" % message, errno)
 
 
 class TimedOut(OSError):
     """ `TimedOut` class, derived from `OSError` """
-    pass
+    def __init__(self, message, errno=None):
+        super(TimedOut, self).__init__(
+                "RADOS timed out (%s)" % message, errno)
+
+
+class InProgress(Error):
+    """ `InProgress` class, derived from `Error` """
+    def __init__(self, message, errno=None):
+        super(InProgress, self).__init__(
+                "RADOS in progress error (%s)" % message, errno)
+
+
+class IsConnected(Error):
+    """ `IsConnected` class, derived from `Error` """
+    def __init__(self, message, errno=None):
+        super(IsConnected, self).__init__(
+                "RADOS is connected error (%s)" % message, errno)
 
 
 IF UNAME_SYSNAME == "FreeBSD":
@@ -428,6 +497,8 @@ IF UNAME_SYSNAME == "FreeBSD":
         errno.EINTR     : InterruptedOrTimeoutError,
         errno.ETIMEDOUT : TimedOut,
         errno.EACCES    : PermissionDeniedError,
+        errno.EINPROGRESS : InProgress,
+        errno.EISCONN   : IsConnected,
         errno.EINVAL    : InvalidArgumentError,
     }
 ELSE:
@@ -442,6 +513,8 @@ ELSE:
         errno.EINTR     : InterruptedOrTimeoutError,
         errno.ETIMEDOUT : TimedOut,
         errno.EACCES    : PermissionDeniedError,
+        errno.EINPROGRESS : InProgress,
+        errno.EISCONN   : IsConnected,
         errno.EINVAL    : InvalidArgumentError,
     }
 
@@ -543,6 +616,11 @@ def decode_cstr(val, encoding="utf-8"):
         return None
 
     return val.decode(encoding)
+
+
+def flatten_dict(d, name):
+    items = chain.from_iterable(d.items())
+    return cstr(''.join(i + '\0' for i in items), name)
 
 
 cdef char* opt_str(s) except? NULL:
@@ -666,6 +744,26 @@ cdef class Rados(object):
         if conf:
             for key, value in conf.items():
                 self.conf_set(key, value)
+
+    def get_addrs(self):
+        """
+        Get associated client addresses with this RADOS session.
+        """
+        self.require_state("configuring", "connected")
+
+        cdef:
+            char* addrs = NULL
+
+        try:
+
+            with nogil:
+                ret = rados_getaddrs(self.cluster, &addrs)
+            if ret:
+                raise make_ex(ret, "error calling getaddrs")
+
+            return decode_cstr(addrs)
+        finally:
+            free(addrs)
 
     def require_state(self, *args):
         """
@@ -882,6 +980,15 @@ Rados object in state %s." % self.state)
             raise make_ex(ret, "error connecting to the cluster")
         self.state = "connected"
 
+    def get_instance_id(self):
+        """
+        Get a global id for current instance
+        """
+        self.require_state("connected")
+        with nogil:
+            ret = rados_get_instance_id(self.cluster)
+        return ret;
+
     def get_cluster_stats(self):
         """
         Read usage info about the cluster
@@ -1002,21 +1109,21 @@ Rados object in state %s." % self.state)
         finally:
             free(name)
 
-    @requires(('pool_name', str_type), ('auid', opt(int)), ('crush_rule', opt(int)))
-    def create_pool(self, pool_name, auid=None, crush_rule=None):
+    @requires(('pool_name', str_type), ('crush_rule', opt(int)), ('auid', opt(int)))
+    def create_pool(self, pool_name, crush_rule=None, auid=None):
         """
         Create a pool:
-        - with default settings: if auid=None and crush_rule=None
-        - owned by a specific auid: auid given and crush_rule=None
-        - with a specific CRUSH rule: if auid=None and crush_rule given
-        - with a specific CRUSH rule and auid: if auid and crush_rule given
-
+        - with default settings: if crush_rule=None and auid=None
+        - with a specific CRUSH rule: crush_rule given
+        - with a specific auid: auid given
+        - with a specific CRUSH rule and auid: crush_rule and auid given       
+ 
         :param pool_name: name of the pool to create
         :type pool_name: str
-        :param auid: the id of the owner of the new pool
-        :type auid: int
         :param crush_rule: rule to use for placement in the new pool
         :type crush_rule: int
+        :param auid: id of the owner of the new pool
+        :type auid: int
 
         :raises: :class:`TypeError`, :class:`Error`
         """
@@ -1028,20 +1135,20 @@ Rados object in state %s." % self.state)
             uint8_t _crush_rule
             uint64_t _auid
 
-        if auid is None and crush_rule is None:
+        if crush_rule is None and auid is None:
             with nogil:
                 ret = rados_pool_create(self.cluster, _pool_name)
-        elif auid is None:
+        elif crush_rule is not None and auid is None:
             _crush_rule = crush_rule
             with nogil:
                 ret = rados_pool_create_with_crush_rule(self.cluster, _pool_name, _crush_rule)
-        elif crush_rule is None:
+        elif crush_rule is None and auid is not None:
             _auid = auid
             with nogil:
                 ret = rados_pool_create_with_auid(self.cluster, _pool_name, _auid)
         else:
-            _auid = auid
             _crush_rule = crush_rule
+            _auid = auid
             with nogil:
                 ret = rados_pool_create_with_all(self.cluster, _pool_name, _auid, _crush_rule)
         if ret < 0:
@@ -1154,26 +1261,23 @@ Rados object in state %s." % self.state)
         """
         self.require_state("connected")
         cdef:
-            char *ret_buf
-            size_t buf_len = 37
-            PyObject* ret_s = NULL
+            char *ret_buf = NULL
+            size_t buf_len = 64
 
-        ret_s = PyBytes_FromStringAndSize(NULL, buf_len)
         try:
-            ret_buf = PyBytes_AsString(ret_s)
-            with nogil:
-                ret = rados_cluster_fsid(self.cluster, ret_buf, buf_len)
-            if ret < 0:
-                raise make_ex(ret, "error getting cluster fsid")
-            if ret != <int>buf_len:
-                _PyBytes_Resize(&ret_s, ret)
-            return <object>ret_s
+            while True:
+                ret_buf = <char *>realloc_chk(ret_buf, buf_len)
+                with nogil:
+                    ret = rados_cluster_fsid(self.cluster, ret_buf, buf_len)
+                if ret == -errno.ERANGE:
+                    buf_len = buf_len * 2
+                elif ret < 0:
+                    raise make_ex(ret, "error getting cluster fsid")
+                else:
+                    break
+            return decode_cstr(ret_buf)
         finally:
-            # We DECREF unconditionally: the cast to object above will have
-            # INCREFed if necessary. This also takes care of exceptions,
-            # including if _PyString_Resize fails (that will free the string
-            # itself and set ret_s to NULL, hence XDECREF).
-            ref.Py_XDECREF(ret_s)
+            free(ret_buf)
 
     @requires(('ioctx_name', str_type))
     def open_ioctx(self, ioctx_name):
@@ -1230,8 +1334,23 @@ Rados object in state %s." % self.state)
 
     def mon_command(self, cmd, inbuf, timeout=0, target=None):
         """
+        Send a command to the mon.
+
         mon_command[_target](cmd, inbuf, outbuf, outbuflen, outs, outslen)
-        returns (int ret, string outbuf, string outs)
+
+        :param cmd: JSON formatted string.
+        :param inbuf: optional string.
+        :param timeout: This parameter is ignored.
+        :param target: name of a specific mon. Optional
+        :return: (int ret, string outbuf, string outs)
+
+        Example:
+
+        >>> import json
+        >>> c = Rados(conffile='/etc/ceph/ceph.conf')
+        >>> c.connect()
+        >>> cmd = json.dumps({"prefix": "osd safe-to-destroy", "ids": ["2"], "format": "json"})
+        >>> c.mon_command(cmd, b'')
         """
         # NOTE(sileht): timeout is ignored because C API doesn't provide
         # timeout argument, but we keep it for backward compat with old python binding
@@ -1288,7 +1407,8 @@ Rados object in state %s." % self.state)
     def osd_command(self, osdid, cmd, inbuf, timeout=0):
         """
         osd_command(osdid, cmd, inbuf, outbuf, outbuflen, outs, outslen)
-        returns (int ret, string outbuf, string outs)
+
+        :return: (int ret, string outbuf, string outs)
         """
         # NOTE(sileht): timeout is ignored because C API doesn't provide
         # timeout argument, but we keep it for backward compat with old python binding
@@ -1328,9 +1448,9 @@ Rados object in state %s." % self.state)
         finally:
             free(_cmd)
 
-    def mgr_command(self, cmd, inbuf, timeout=0):
+    def mgr_command(self, cmd, inbuf, timeout=0, target=None):
         """
-        returns (int ret, string outbuf, string outs)
+        :return: (int ret, string outbuf, string outs)
         """
         # NOTE(sileht): timeout is ignored because C API doesn't provide
         # timeout argument, but we keep it for backward compat with old python binding
@@ -1338,8 +1458,11 @@ Rados object in state %s." % self.state)
 
         cmd = cstr_list(cmd, 'cmd')
         inbuf = cstr(inbuf, 'inbuf')
+        target = cstr(target, 'target', opt=True)
 
         cdef:
+            char *_target = opt_str(target)
+
             char **_cmd = to_bytes_array(cmd)
             size_t _cmdlen = len(cmd)
 
@@ -1352,12 +1475,21 @@ Rados object in state %s." % self.state)
             size_t _outs_len
 
         try:
-            with nogil:
-                ret = rados_mgr_command(self.cluster,
-                                        <const char **>_cmd, _cmdlen,
-                                        <const char*>_inbuf, _inbuf_len,
-                                        &_outbuf, &_outbuf_len,
-                                        &_outs, &_outs_len)
+            if target is not None:
+                with nogil:
+                    ret = rados_mgr_command_target(self.cluster,
+		                            <const char*>_target,
+                                            <const char **>_cmd, _cmdlen,
+                                            <const char*>_inbuf, _inbuf_len,
+                                            &_outbuf, &_outbuf_len,
+                                            &_outs, &_outs_len)
+            else:
+                with nogil:
+                    ret = rados_mgr_command(self.cluster,
+                                            <const char **>_cmd, _cmdlen,
+                                            <const char*>_inbuf, _inbuf_len,
+                                            &_outbuf, &_outbuf_len,
+                                            &_outs, &_outs_len)
 
             my_outs = decode_cstr(_outs[:_outs_len])
             my_outbuf = _outbuf[:_outbuf_len]
@@ -1372,7 +1504,8 @@ Rados object in state %s." % self.state)
     def pg_command(self, pgid, cmd, inbuf, timeout=0):
         """
         pg_command(pgid, cmd, inbuf, outbuf, outbuflen, outs, outslen)
-        returns (int ret, string outbuf, string outs)
+
+        :return: (int ret, string outbuf, string outs)
         """
         # NOTE(sileht): timeout is ignored because C API doesn't provide
         # timeout argument, but we keep it for backward compat with old python binding
@@ -1507,8 +1640,7 @@ Rados object in state %s." % self.state)
         """
         service = cstr(service, 'service')
         daemon = cstr(daemon, 'daemon')
-        metadata_dict = '\0'.join(chain.from_iterable(metadata.items()))
-        metadata_dict += '\0'
+        metadata_dict = flatten_dict(metadata, 'metadata')
         cdef:
             char *_service = service
             char *_daemon = daemon
@@ -1521,8 +1653,7 @@ Rados object in state %s." % self.state)
 
     @requires(('metadata', dict))
     def service_daemon_update(self, status):
-        status_dict = '\0'.join(chain.from_iterable(status.items()))
-        status_dict += '\0'
+        status_dict = flatten_dict(status, 'status')
         cdef:
             char *_status = status_dict
 
@@ -1797,9 +1928,7 @@ cdef class Completion(object):
 
         :returns: True if the operation is safe
         """
-        with nogil:
-            ret = rados_aio_is_safe(self.rados_comp)
-        return ret == 1
+        return self.is_complete()
 
     def is_complete(self):
         """
@@ -1817,10 +1946,9 @@ cdef class Completion(object):
         """
         Wait for an asynchronous operation to be marked safe
 
-        This does not imply that the safe callback has finished.
+        wait_for_safe() is an alias of wait_for_complete()  since Luminous
         """
-        with nogil:
-            rados_aio_wait_for_safe(self.rados_comp)
+        self.wait_for_complete()
 
     def wait_for_complete(self):
         """
@@ -1836,8 +1964,7 @@ cdef class Completion(object):
         Wait for an asynchronous operation to be marked safe and for
         the safe callback to have returned
         """
-        with nogil:
-            rados_aio_wait_for_safe_and_cb(self.rados_comp)
+        return self.wait_for_complete_and_cb()
 
     def wait_for_complete_and_cb(self):
         """
@@ -1879,15 +2006,9 @@ cdef class Completion(object):
 
     def _complete(self):
         self.oncomplete(self)
-        with self.ioctx.lock:
-            if self.oncomplete:
-                self.ioctx.complete_completions.remove(self)
-
-    def _safe(self):
-        self.onsafe(self)
-        with self.ioctx.lock:
-            if self.onsafe:
-                self.ioctx.safe_completions.remove(self)
+        if self.onsafe:
+            self.onsafe(self)
+        self._cleanup()
 
     def _cleanup(self):
         with self.ioctx.lock:
@@ -1951,6 +2072,36 @@ cdef class WriteOp(object):
         with nogil:
             rados_write_op_set_flags(self.write_op, _flags)
 
+    @requires(('xattr_name', str_type), ('xattr_value', bytes))
+    def set_xattr(self, xattr_name, xattr_value):
+        """
+        Set an extended attribute on an object.
+        :param xattr_name: name of the xattr
+        :type xattr_name: str
+        :param xattr_value: buffer to set xattr to
+        :type xattr_value: bytes
+        """
+        xattr_name = cstr(xattr_name, 'xattr_name')
+        cdef:
+            char *_xattr_name = xattr_name
+            char *_xattr_value = xattr_value
+            size_t _xattr_value_len = len(xattr_value)
+        with nogil:
+            rados_write_op_setxattr(self.write_op, _xattr_name, _xattr_value, _xattr_value_len)
+
+    @requires(('xattr_name', str_type))
+    def rm_xattr(self, xattr_name):
+        """  
+        Removes an extended attribute on from an object.
+        :param xattr_name: name of the xattr to remove
+        :type xattr_name: str
+        """
+        xattr_name = cstr(xattr_name, 'xattr_name')
+        cdef:
+            char *_xattr_name = xattr_name
+        with nogil:
+            rados_write_op_rmxattr(self.write_op, _xattr_name)
+
     @requires(('to_write', bytes))
     def append(self, to_write):
         """
@@ -1999,6 +2150,19 @@ cdef class WriteOp(object):
         with nogil:
             rados_write_op_write(self.write_op, _to_write, length, _offset)
 
+    @requires(('version', int))
+    def assert_version(self, version):
+        """
+        Check if object's version is the expected one.
+        :param version: expected version of the object
+        :param type: int
+        """
+        cdef:
+            uint64_t _version = version
+
+        with nogil:
+            rados_write_op_assert_version(self.write_op, _version)
+
     @requires(('offset', int), ('length', int))
     def zero(self, offset, length):
         """
@@ -2030,6 +2194,48 @@ cdef class WriteOp(object):
         with nogil:
             rados_write_op_truncate(self.write_op,  _offset)
 
+    @requires(('cls', str_type), ('method', str_type), ('data', bytes))
+    def execute(self, cls, method, data):
+        """
+        Execute an OSD class method on an object
+        
+        :param cls: name of the object class
+        :type cls: str
+        :param method: name of the method
+        :type method: str
+        :param data: input data
+        :type data: bytes
+        """
+
+        cls = cstr(cls, 'cls')
+        method = cstr(method, 'method')
+        cdef:
+            char *_cls = cls
+            char *_method = method
+            char *_data = data
+            size_t _data_len = len(data)
+
+        with nogil:
+            rados_write_op_exec(self.write_op, _cls, _method, _data, _data_len, NULL)
+
+    @requires(('to_write', bytes), ('write_len', int), ('offset', int))
+    def writesame(self, to_write, write_len, offset=0):
+        """
+        Write the same buffer multiple times
+        :param to_write: data to write
+        :type to_write: bytes
+        :param write_len: total number of bytes to write
+        :type len: int
+        :param offset: byte offset in the object to begin writing at
+        :type offset: int
+        """
+        cdef:
+            char *_to_write = to_write
+            size_t _data_len = len(to_write)
+            size_t _write_len = write_len
+            uint64_t _offset = offset
+        with nogil:
+             rados_write_op_writesame(self.write_op, _to_write, _data_len, _write_len, _offset)
 
 class WriteOpCtx(WriteOp, OpCtx):
     """write operation context manager"""
@@ -2064,15 +2270,6 @@ cdef class ReadOp(object):
 
 class ReadOpCtx(ReadOp, OpCtx):
     """read operation context manager"""
-
-
-cdef int __aio_safe_cb(rados_completion_t completion, void *args) with gil:
-    """
-    Callback to onsafe() for asynchronous operations
-    """
-    cdef object cb = <object>args
-    cb._safe()
-    return 0
 
 
 cdef int __aio_complete_cb(rados_completion_t completion, void *args) with gil:
@@ -2135,17 +2332,14 @@ cdef class Ioctx(object):
 
         cdef:
             rados_callback_t complete_cb = NULL
-            rados_callback_t safe_cb = NULL
             rados_completion_t completion
             PyObject* p_completion_obj= <PyObject*>completion_obj
 
         if oncomplete:
             complete_cb = <rados_callback_t>&__aio_complete_cb
-        if onsafe:
-            safe_cb = <rados_callback_t>&__aio_safe_cb
 
         with nogil:
-            ret = rados_aio_create_completion(p_completion_obj, complete_cb, safe_cb,
+            ret = rados_aio_create_completion2(p_completion_obj, complete_cb,
                                               &completion)
         if ret < 0:
             raise make_ex(ret, "error getting a completion")
@@ -2249,7 +2443,7 @@ cdef class Ioctx(object):
     def aio_write_full(self, object_name, to_write,
                        oncomplete=None, onsafe=None):
         """
-        Asychronously write an entire object
+        Asynchronously write an entire object
 
         The object is filled with the provided data. If the object exists,
         it is atomically truncated and then written.
@@ -2289,11 +2483,54 @@ cdef class Ioctx(object):
             raise make_ex(ret, "error writing object %s" % object_name)
         return completion
 
+    @requires(('object_name', str_type), ('to_write', bytes), ('write_len', int),
+              ('offset', int), ('oncomplete', opt(Callable)))
+    def aio_writesame(self, object_name, to_write, write_len, offset=0,
+                      oncomplete=None):
+        """    
+        Asynchronously write the same buffer multiple times
+
+        :param object_name: name of the object
+        :type object_name: str
+        :param to_write: data to write
+        :type to_write: bytes
+        :param write_len: total number of bytes to write
+        :type write_len: int
+        :param offset: byte offset in the object to begin writing at
+        :type offset: int
+        :param oncomplete: what to do when the writesame is safe and 
+            complete in memory on all replicas
+        :type oncomplete: completion
+        :raises: :class:`Error`
+        :returns: completion object
+        """
+
+        object_name = cstr(object_name, 'object_name')
+
+        cdef:
+            Completion completion
+            char* _object_name = object_name
+            char* _to_write = to_write
+            size_t _data_len = len(to_write)
+            size_t _write_len = write_len
+            uint64_t _offset = offset
+
+        completion = self.__get_completion(oncomplete, None)
+        self.__track_completion(completion)
+        with nogil:
+            ret = rados_aio_writesame(self.io, _object_name, completion.rados_comp, 
+                                       _to_write, _data_len, _write_len, _offset)
+
+        if ret < 0:
+            completion._cleanup()
+            raise make_ex(ret, "error writing object %s" % object_name)
+        return completion
+
     @requires(('object_name', str_type), ('to_append', bytes), ('oncomplete', opt(Callable)),
               ('onsafe', opt(Callable)))
     def aio_append(self, object_name, to_append, oncomplete=None, onsafe=None):
         """
-        Asychronously append data to an object
+        Asynchronously append data to an object
 
         Queues the write and returns.
 
@@ -2347,7 +2584,7 @@ cdef class Ioctx(object):
               ('oncomplete', opt(Callable)))
     def aio_read(self, object_name, length, offset, oncomplete):
         """
-        Asychronously read data from an object
+        Asynchronously read data from an object
 
         oncomplete will be called with the returned read value as
         well as the completion:
@@ -2470,7 +2707,7 @@ cdef class Ioctx(object):
     @requires(('object_name', str_type), ('oncomplete', opt(Callable)), ('onsafe', opt(Callable)))
     def aio_remove(self, object_name, oncomplete=None, onsafe=None):
         """
-        Asychronously remove an object
+        Asynchronously remove an object
 
         :param object_name: name of the object to remove
         :type object_name: str
@@ -2508,26 +2745,6 @@ cdef class Ioctx(object):
         """
         if self.state != "open":
             raise IoctxStateError("The pool is %s" % self.state)
-
-    def change_auid(self, auid):
-        """
-        Attempt to change an io context's associated auid "owner."
-
-        Requires that you have write permission on both the current and new
-        auid.
-
-        :raises: :class:`Error`
-        """
-        self.require_ioctx_open()
-
-        cdef:
-            uint64_t _auid = auid
-
-        with nogil:
-            ret = rados_ioctx_pool_set_auid(self.io, _auid)
-        if ret < 0:
-            raise make_ex(ret, "error changing auid of '%s' to %d"
-                          % (self.name, auid))
 
     @requires(('loc_key', str_type))
     def set_locator_key(self, loc_key):
@@ -2695,6 +2912,39 @@ returned %d, but should return zero on success." % (self.name, ret))
         else:
             raise LogicError("Ioctx.write_full(%s): rados_write_full \
 returned %d, but should return zero on success." % (self.name, ret))
+
+    @requires(('key', str_type), ('data', bytes), ('write_len', int), ('offset', int))
+    def writesame(self, key, data, write_len, offset=0):
+        """
+        Write the same buffer multiple times
+        :param key: name of the object
+        :type key: str
+        :param data: data to write
+        :type data: bytes
+        :param write_len: total number of bytes to write
+        :type write_len: int
+        :param offset: byte offset in the object to begin writing at
+        :type offset: int
+
+        :raises: :class:`TypeError`
+        :raises: :class:`LogicError`
+        """
+        self.require_ioctx_open()
+
+        key = cstr(key, 'key')
+        cdef:
+            char *_key = key
+            char *_data = data
+            size_t _data_len = len(data)
+            size_t _write_len = write_len
+            uint64_t _offset = offset
+
+        with nogil:
+            ret = rados_writesame(self.io, _key, _data, _data_len, _write_len, _offset)
+        if ret < 0:
+            raise make_ex(ret, "Ioctx.writesame(%s): failed to write %s"
+                           % (self.name, key))
+        assert(ret == 0)
 
     @requires(('key', str_type), ('data', bytes))
     def append(self, key, data):
@@ -3075,6 +3325,40 @@ returned %d, but should return zero on success." % (self.name, ret))
                           (key, xattr_name))
         return True
 
+    @requires(('obj', str_type), ('msg', str_type), ('timeout_ms', int))
+    def notify(self, obj, msg='', timeout_ms=5000):
+        """
+        Send a rados notification to an object.
+
+        :param obj: the name of the object to notify
+        :type obj: str
+        :param msg: optional message to send in the notification
+        :type msg: str
+        :param timeout_ms: notify timeout (in ms)
+        :type timeout_ms: int
+
+        :raises: :class:`TypeError`
+        :raises: :class:`Error`
+        :returns: bool - True on success, otherwise raise an error
+        """
+        self.require_ioctx_open()
+
+        msglen = len(msg)
+        obj = cstr(obj, 'obj')
+        msg = cstr(msg, 'msg')
+        cdef:
+            char *_obj = obj
+            char *_msg = msg
+            int _msglen = msglen
+            uint64_t _timeout_ms = timeout_ms
+
+        with nogil:
+            ret = rados_notify2(self.io, _obj, _msg, _msglen, _timeout_ms,
+                                NULL, NULL)
+        if ret < 0:
+            raise make_ex(ret, "Failed to notify %r" % (obj))
+        return True
+
     def list_objects(self):
         """
         Get ObjectIterator on rados.Ioctx object.
@@ -3092,6 +3376,43 @@ returned %d, but should return zero on success." % (self.name, ret))
         """
         self.require_ioctx_open()
         return SnapIterator(self)
+
+    def get_pool_id(self):
+        """
+        Get pool id
+
+        :returns: int - pool id
+        """
+        with nogil:
+            ret = rados_ioctx_get_id(self.io)
+        return ret;
+
+    def get_pool_name(self):
+        """
+        Get pool name
+
+        :returns: str - pool name
+        """
+        cdef:
+            int name_len = 10
+            char *name = NULL
+
+        try:
+            while True:
+                name = <char *>realloc_chk(name, name_len)
+                with nogil:
+                    ret = rados_ioctx_get_pool_name(self.io, name, name_len)
+                if ret > 0:
+                    break
+                elif ret != -errno.ERANGE:
+                    raise make_ex(ret, "get pool name error")
+                else:
+                    name_len = name_len * 2
+
+            return decode_cstr(name)
+        finally:
+            free(name)
+
 
     @requires(('snap_name', str_type))
     def create_snap(self, snap_name):
@@ -3182,6 +3503,101 @@ returned %d, but should return zero on success." % (self.name, ret))
         if ret != 0:
             raise make_ex(ret, "Failed to rollback %s" % oid)
 
+    def create_self_managed_snap(self):
+        """
+        Creates a self-managed snapshot
+
+        :returns: snap id on success
+
+        :raises: :class:`Error`
+        """
+        self.require_ioctx_open()
+        cdef:
+            rados_snap_t _snap_id
+        with nogil:
+            ret = rados_ioctx_selfmanaged_snap_create(self.io, &_snap_id)
+        if ret != 0:
+            raise make_ex(ret, "Failed to create self-managed snapshot")
+        return int(_snap_id)
+
+    @requires(('snap_id', int))
+    def remove_self_managed_snap(self, snap_id):
+        """
+        Removes a self-managed snapshot
+
+        :param snap_id: the name of the snapshot
+        :type snap_id: int
+
+        :raises: :class:`TypeError`
+        :raises: :class:`Error`
+        """
+        self.require_ioctx_open()
+        cdef:
+            rados_snap_t _snap_id = snap_id
+        with nogil:
+            ret = rados_ioctx_selfmanaged_snap_remove(self.io, _snap_id)
+        if ret != 0:
+            raise make_ex(ret, "Failed to remove self-managed snapshot")
+
+    def set_self_managed_snap_write(self, snaps):
+        """
+        Updates the write context to the specified self-managed
+        snapshot ids.
+
+        :param snaps: all associated self-managed snapshot ids
+        :type snaps: list
+
+        :raises: :class:`TypeError`
+        :raises: :class:`Error`
+        """
+        self.require_ioctx_open()
+        sorted_snaps = []
+        snap_seq = 0
+        if snaps:
+            sorted_snaps = sorted([int(x) for x in snaps], reverse=True)
+            snap_seq = sorted_snaps[0]
+
+        cdef:
+            rados_snap_t _snap_seq = snap_seq
+            rados_snap_t *_snaps = NULL
+            int _num_snaps = len(sorted_snaps)
+        try:
+            _snaps = <rados_snap_t *>malloc(_num_snaps * sizeof(rados_snap_t))
+            for i in range(len(sorted_snaps)):
+                _snaps[i] = sorted_snaps[i]
+            with nogil:
+                ret = rados_ioctx_selfmanaged_snap_set_write_ctx(self.io,
+                                                                 _snap_seq,
+                                                                 _snaps,
+                                                                 _num_snaps)
+            if ret != 0:
+                raise make_ex(ret, "Failed to update snapshot write context")
+        finally:
+            free(_snaps)
+
+    @requires(('oid', str_type), ('snap_id', int))
+    def rollback_self_managed_snap(self, oid, snap_id):
+        """
+        Rolls an specific object back to a self-managed snapshot revision
+
+        :param oid: the name of the object
+        :type oid: str
+        :param snap_id: the name of the snapshot
+        :type snap_id: int
+
+        :raises: :class:`TypeError`
+        :raises: :class:`Error`
+        """
+        self.require_ioctx_open()
+        oid = cstr(oid, 'oid')
+        cdef:
+            char *_oid = oid
+            rados_snap_t _snap_id = snap_id
+        with nogil:
+            ret = rados_ioctx_selfmanaged_snap_rollback(self.io, _oid, _snap_id)
+        if ret != 0:
+            raise make_ex(ret, "Failed to rollback %s" % oid)
+
     def get_last_version(self):
         """
         Return the version of the last object read or written to.
@@ -3240,12 +3656,14 @@ returned %d, but should return zero on success." % (self.name, ret))
             raise Error("Rados(): keys and values must have the same number of items")
 
         keys = cstr_list(keys, 'keys')
+        values = cstr_list(values, 'values')
+        lens = [len(v) for v in values]
         cdef:
             WriteOp _write_op = write_op
             size_t key_num = len(keys)
             char **_keys = to_bytes_array(keys)
             char **_values = to_bytes_array(values)
-            size_t *_lens = to_csize_t_array([len(v) for v in values])
+            size_t *_lens = to_csize_t_array(lens)
 
         try:
             with nogil:
@@ -3405,14 +3823,13 @@ returned %d, but should return zero on success." % (self.name, ret))
             ReadOp _read_op = read_op
             rados_omap_iter_t iter_addr = NULL
             int _max_return = max_return
-            int prval = 0
 
         with nogil:
             rados_read_op_omap_get_vals2(_read_op.read_op, _start_after, _filter_prefix,
-                                         _max_return, &iter_addr, NULL, &prval)
+                                         _max_return, &iter_addr, NULL, NULL)
         it = OmapIterator(self)
         it.ctx = iter_addr
-        return it, int(prval)
+        return it, 0   # 0 is meaningless; there for backward-compat
 
     @requires(('read_op', ReadOp), ('start_after', str_type), ('max_return', int))
     def get_omap_keys(self, read_op, start_after, max_return):
@@ -3432,14 +3849,13 @@ returned %d, but should return zero on success." % (self.name, ret))
             ReadOp _read_op = read_op
             rados_omap_iter_t iter_addr = NULL
             int _max_return = max_return
-            int prval = 0
 
         with nogil:
             rados_read_op_omap_get_keys2(_read_op.read_op, _start_after,
-                                         _max_return, &iter_addr, NULL, &prval)
+                                         _max_return, &iter_addr, NULL, NULL)
         it = OmapIterator(self)
         it.ctx = iter_addr
-        return it, int(prval)
+        return it, 0   # 0 is meaningless; there for backward-compat
 
     @requires(('read_op', ReadOp), ('keys', tuple))
     def get_omap_vals_by_keys(self, read_op, keys):
@@ -3457,16 +3873,15 @@ returned %d, but should return zero on success." % (self.name, ret))
             rados_omap_iter_t iter_addr
             char **_keys = to_bytes_array(keys)
             size_t key_num = len(keys)
-            int prval = 0
 
         try:
             with nogil:
                 rados_read_op_omap_get_vals_by_keys(_read_op.read_op,
                                                     <const char**>_keys,
-                                                    key_num, &iter_addr,  &prval)
+                                                    key_num, &iter_addr, NULL)
             it = OmapIterator(self)
             it.ctx = iter_addr
-            return it, int(prval)
+            return it, 0   # 0 is meaningless; there for backward-compat
         finally:
             free(_keys)
 
@@ -3705,6 +4120,44 @@ returned %d, but should return zero on success." % (self.name, ret))
         finally:
             free(apps)
 
+    def application_metadata_get(self, app_name, key):
+        """
+        Gets application metadata on an OSD pool for the given key
+
+        :param app_name: application name
+        :type app_name: str
+        :param key: metadata key
+        :type key: str
+        :returns: str - metadata value
+
+        :raises: :class:`Error`
+        """
+
+        app_name =  cstr(app_name, 'app_name')
+        key = cstr(key, 'key')
+        cdef:
+            char *_app_name = app_name
+            char *_key = key
+            size_t size = 129
+            char *value = NULL
+            int ret
+        try:
+            while True:
+                value = <char *>realloc_chk(value, size)
+                with nogil:
+                    ret = rados_application_metadata_get(self.io, _app_name,
+                                                         _key, value, &size)
+                if ret != -errno.ERANGE:
+                    break
+            if ret == -errno.ENOENT:
+                raise KeyError('no metadata %s for application %s' % (key, _app_name))
+            elif ret != 0:
+                raise make_ex(ret, 'error getting metadata %s for application %s' %
+                              (key, _app_name))
+            return decode_cstr(value)
+        finally:
+            free(value)
+
     def application_metadata_set(self, app_name, key, value):
         """
         Sets application metadata on an OSD pool
@@ -3780,10 +4233,10 @@ returned %d, but should return zero on success." % (self.name, ret))
                                                           c_vals, &val_length)
                 if ret == 0:
                     keys = [decode_cstr(key) for key in
-                                c_keys[:key_length].split(b'\0') if key]
+                                c_keys[:key_length].split(b'\0')]
                     vals = [decode_cstr(val) for val in
-                                c_vals[:val_length].split(b'\0') if val]
-                    return zip(keys, vals)
+                                c_vals[:val_length].split(b'\0')]
+                    return list(zip(keys, vals))[:-1]
                 elif ret == -errno.ERANGE:
                     pass
                 else:

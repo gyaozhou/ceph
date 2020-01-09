@@ -15,10 +15,12 @@
 #include "BaseMgrStandbyModule.h"
 #include "PyOSDMap.h"
 #include "MgrContext.h"
+#include "PyUtil.h"
 
 #include "PyModule.h"
 
 #include "common/debug.h"
+#include "common/errno.h"
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_mgr
 
@@ -31,7 +33,7 @@ std::string PyModule::config_prefix = "mgr/";
 // Courtesy of http://stackoverflow.com/questions/1418015/how-to-get-python-exception-text
 #include <boost/python.hpp>
 #include <boost/algorithm/string/predicate.hpp>
-#include "include/assert.h"  // boost clobbers this
+#include "include/ceph_assert.h"  // boost clobbers this
 // decode a Python exception into a string
 std::string handle_pyerror()
 {
@@ -52,7 +54,7 @@ std::string handle_pyerror()
           // returning only the exception string value
           PyObject *name_attr = PyObject_GetAttrString(exc, "__name__");
           std::stringstream ss;
-          ss << PyString_AsString(name_attr) << ": " << PyString_AsString(val);
+          ss << PyUnicode_AsUTF8(name_attr) << ": " << PyUnicode_AsUTF8(val);
           Py_XDECREF(name_attr);
           return ss.str();
         }
@@ -65,7 +67,7 @@ std::string handle_pyerror()
           // returning only the exception string value
           PyObject *name_attr = PyObject_GetAttrString(exc, "__name__");
           std::stringstream ss;
-          ss << PyString_AsString(name_attr) << ": " << PyString_AsString(val);
+          ss << PyUnicode_AsUTF8(name_attr) << ": " << PyUnicode_AsUTF8(val);
           Py_XDECREF(name_attr);
           return ss.str();
         }
@@ -82,10 +84,10 @@ std::string peek_pyerror()
 {
   PyObject *ptype, *pvalue, *ptraceback;
   PyErr_Fetch(&ptype, &pvalue, &ptraceback);
-  assert(ptype);
-  assert(pvalue);
+  ceph_assert(ptype);
+  ceph_assert(pvalue);
   PyObject *pvalue_str = PyObject_Str(pvalue);
-  std::string exc_msg = PyString_AsString(pvalue_str);
+  std::string exc_msg = PyUnicode_AsUTF8(pvalue_str);
   Py_DECREF(pvalue_str);
   PyErr_Restore(ptype, pvalue, ptraceback);
 
@@ -143,16 +145,6 @@ void PyModuleConfig::set_config(
 {
   const std::string global_key = PyModule::config_prefix
                                    + module_name + "/" + key;
-  {
-    Mutex::Locker l(lock);
-
-    if (val) {
-      config[global_key] = *val;
-    } else {
-      config.erase(global_key);
-    }
-  }
-
   Command set_cmd;
   {
     std::ostringstream cmd_json;
@@ -160,23 +152,33 @@ void PyModuleConfig::set_config(
     jf.open_object_section("cmd");
     if (val) {
       jf.dump_string("prefix", "config set");
-      jf.dump_string("who", "mgr");
-      jf.dump_string("name", global_key);
       jf.dump_string("value", *val);
     } else {
       jf.dump_string("prefix", "config rm");
-      jf.dump_string("name", "mgr");
-      jf.dump_string("key", global_key);
     }
+    jf.dump_string("who", "mgr");
+    jf.dump_string("name", global_key);
     jf.close_section();
     jf.flush(cmd_json);
     set_cmd.run(monc, cmd_json.str());
   }
   set_cmd.wait();
 
-  if (set_cmd.r != 0) {
-    dout(0) << "`config set mgr" << global_key << " " << val << "` failed: "
-      << cpp_strerror(set_cmd.r) << dendl;
+  if (set_cmd.r == 0) {
+    std::lock_guard l(lock);
+    if (val) {
+      config[global_key] = *val;
+    } else {
+      config.erase(global_key);
+    }
+  } else {
+    if (val) {
+      dout(0) << "`config set mgr " << global_key << " " << val << "` failed: "
+        << cpp_strerror(set_cmd.r) << dendl;
+    } else {
+      dout(0) << "`config rm mgr " << global_key << "` failed: "
+        << cpp_strerror(set_cmd.r) << dendl;
+    }
     dout(0) << "mon returned " << set_cmd.r << ": " << set_cmd.outs << dendl;
   }
 }
@@ -188,19 +190,19 @@ std::string PyModule::get_site_packages()
   // CPython doesn't auto-add site-packages dirs to sys.path for us,
   // but it does provide a module that we can ask for them.
   auto site_module = PyImport_ImportModule("site");
-  assert(site_module);
+  ceph_assert(site_module);
 
   auto site_packages_fn = PyObject_GetAttrString(site_module, "getsitepackages");
   if (site_packages_fn != nullptr) {
     auto site_packages_list = PyObject_CallObject(site_packages_fn, nullptr);
-    assert(site_packages_list);
+    ceph_assert(site_packages_list);
 
     auto n = PyList_Size(site_packages_list);
     for (Py_ssize_t i = 0; i < n; ++i) {
       if (i != 0) {
         site_packages << ":";
       }
-      site_packages << PyString_AsString(PyList_GetItem(site_packages_list, i));
+      site_packages << PyUnicode_AsUTF8(PyList_GetItem(site_packages_list, i));
     }
 
     Py_DECREF(site_packages_list);
@@ -211,7 +213,7 @@ std::string PyModule::get_site_packages()
     // run inside virtualenvs :-/
 
     auto site_packages_fn = PyObject_GetAttrString(site_module, "addsitepackages");
-    assert(site_packages_fn);
+    ceph_assert(site_packages_fn);
 
     auto known_paths = PySet_New(nullptr);
     auto pArgs = PyTuple_Pack(1, known_paths);
@@ -221,21 +223,21 @@ std::string PyModule::get_site_packages()
     Py_DECREF(site_packages_fn);
 
     auto sys_module = PyImport_ImportModule("sys");
-    assert(sys_module);
+    ceph_assert(sys_module);
     auto sys_path = PyObject_GetAttrString(sys_module, "path");
-    assert(sys_path);
+    ceph_assert(sys_path);
 
     dout(1) << "sys.path:" << dendl;
     auto n = PyList_Size(sys_path);
     bool first = true;
     for (Py_ssize_t i = 0; i < n; ++i) {
-      dout(1) << "  " << PyString_AsString(PyList_GetItem(sys_path, i)) << dendl;
+      dout(1) << "  " << PyUnicode_AsUTF8(PyList_GetItem(sys_path, i)) << dendl;
       if (first) {
         first = false;
       } else {
         site_packages << ":";
       }
-      site_packages << PyString_AsString(PyList_GetItem(sys_path, i));
+      site_packages << PyUnicode_AsUTF8(PyList_GetItem(sys_path, i));
     }
 
     Py_DECREF(sys_path);
@@ -289,7 +291,7 @@ void PyModule::init_ceph_module()
 #else
   PyObject *ceph_module = Py_InitModule("ceph_module", module_methods);
 #endif
-  assert(ceph_module != nullptr);
+  ceph_assert(ceph_module != nullptr);
   std::map<const char*, PyTypeObject*> classes{
     {{"BaseMgrModule", &BaseMgrModuleType},
      {"BaseMgrStandbyModule", &BaseMgrStandbyModuleType},
@@ -300,7 +302,7 @@ void PyModule::init_ceph_module()
   for (auto [name, type] : classes) {
     type->tp_new = PyType_GenericNew;
     if (PyType_Ready(type) < 0) {
-      assert(0);
+      ceph_abort();
     }
     Py_INCREF(type);
 
@@ -313,7 +315,7 @@ void PyModule::init_ceph_module()
 
 int PyModule::load(PyThreadState *pMainThreadState)
 {
-  assert(pMainThreadState != nullptr);
+  ceph_assert(pMainThreadState != nullptr);
 
   // Configure sub-interpreter
   {
@@ -336,8 +338,8 @@ int PyModule::load(PyThreadState *pMainThreadState)
       PySys_SetArgv(1, (char**)argv);
 #endif
       // Configure sys.path to include mgr_module_path
-      string paths = (":" + get_site_packages() +
-		      ":" + g_conf->get_val<std::string>("mgr_module_path"));
+      string paths = (":" + g_conf().get_val<std::string>("mgr_module_path") +
+		      ":" + get_site_packages());
 #if PY_MAJOR_VERSION >= 3
       wstring sys_path(Py_GetPath() + wstring(begin(paths), end(paths)));
       PySys_SetPath(const_cast<wchar_t*>(sys_path.c_str()));
@@ -371,9 +373,9 @@ int PyModule::load(PyThreadState *pMainThreadState)
 
     r = load_options();
     if (r != 0) {
-      derr << "Missing or invalid OPTIONS attribute in module '"
+      derr << "Missing or invalid MODULE_OPTIONS attribute in module '"
           << module_name << "'" << dendl;
-      error_string = "Missing or invalid OPTIONS attribute";
+      error_string = "Missing or invalid MODULE_OPTIONS attribute";
       return r;
     }
 
@@ -399,7 +401,7 @@ int PyModule::load(PyThreadState *pMainThreadState)
       if (PyTuple_Check(pCanRunTuple) && PyTuple_Size(pCanRunTuple) == 2) {
         PyObject *pCanRun = PyTuple_GetItem(pCanRunTuple, 0);
         PyObject *can_run_str = PyTuple_GetItem(pCanRunTuple, 1);
-        if (!PyBool_Check(pCanRun) || !PyString_Check(can_run_str)) {
+        if (!PyBool_Check(pCanRun) || !PyUnicode_Check(can_run_str)) {
           derr << "Module " << get_name()
                << " returned wrong type in can_run" << dendl;
           error_string = "wrong type returned from can_run";
@@ -407,7 +409,7 @@ int PyModule::load(PyThreadState *pMainThreadState)
         } else {
           can_run = (pCanRun == Py_True);
           if (!can_run) {
-            error_string = PyString_AsString(can_run_str);
+            error_string = PyUnicode_AsUTF8(can_run_str);
             dout(4) << "Module " << get_name()
                     << " reported that it cannot run: "
                     << error_string << dendl;
@@ -453,7 +455,7 @@ int PyModule::walk_dict_list(
   const size_t list_size = PyList_Size(command_list);
   for (size_t i = 0; i < list_size; ++i) {
     PyObject *command = PyList_GetItem(command_list, i);
-    assert(command != nullptr);
+    ceph_assert(command != nullptr);
 
     if (!PyDict_Check(command)) {
       derr << "Module " << get_name() << " has non-dict entry "
@@ -473,27 +475,38 @@ int PyModule::walk_dict_list(
 
 int PyModule::load_commands()
 {
+  PyObject *pRegCmd = PyObject_CallMethod(pClass,
+      const_cast<char*>("_register_commands"), const_cast<char*>("(s)"),
+      module_name.c_str());
+  if (pRegCmd != nullptr) {
+    Py_DECREF(pRegCmd);
+  } else {
+    derr << "Exception calling _register_commands on " << get_name()
+         << dendl;
+    derr << handle_pyerror() << dendl;
+  }
+
   int r = walk_dict_list("COMMANDS", [this](PyObject *pCommand) -> int {
     ModuleCommand command;
 
     PyObject *pCmd = PyDict_GetItemString(pCommand, "cmd");
-    assert(pCmd != nullptr);
-    command.cmdstring = PyString_AsString(pCmd);
+    ceph_assert(pCmd != nullptr);
+    command.cmdstring = PyUnicode_AsUTF8(pCmd);
 
     dout(20) << "loaded command " << command.cmdstring << dendl;
 
     PyObject *pDesc = PyDict_GetItemString(pCommand, "desc");
-    assert(pDesc != nullptr);
-    command.helpstring = PyString_AsString(pDesc);
+    ceph_assert(pDesc != nullptr);
+    command.helpstring = PyUnicode_AsUTF8(pDesc);
 
     PyObject *pPerm = PyDict_GetItemString(pCommand, "perm");
-    assert(pPerm != nullptr);
-    command.perm = PyString_AsString(pPerm);
+    ceph_assert(pPerm != nullptr);
+    command.perm = PyUnicode_AsUTF8(pPerm);
 
     command.polling = false;
     PyObject *pPoll = PyDict_GetItemString(pCommand, "poll");
     if (pPoll) {
-      std::string polling = PyString_AsString(pPoll);
+      std::string polling = PyUnicode_AsUTF8(pPoll);
       if (boost::iequals(polling, "true")) {
         command.polling = true;
       }
@@ -513,16 +526,87 @@ int PyModule::load_commands()
 
 int PyModule::load_options()
 {
-  int r = walk_dict_list("OPTIONS", [this](PyObject *pOption) -> int {
-    PyObject *pName = PyDict_GetItemString(pOption, "name");
-    assert(pName != nullptr);
-
-    ModuleOption option;
-    option.name = PyString_AsString(pName);
-    dout(20) << "loaded option " << option.name << dendl;
-
+  int r = walk_dict_list("MODULE_OPTIONS", [this](PyObject *pOption) -> int {
+    MgrMap::ModuleOption option;
+    PyObject *p;
+    p = PyDict_GetItemString(pOption, "name");
+    ceph_assert(p != nullptr);
+    option.name = PyUnicode_AsUTF8(p);
+    option.type = Option::TYPE_STR;
+    p = PyDict_GetItemString(pOption, "type");
+    if (p && PyObject_TypeCheck(p, &PyUnicode_Type)) {
+      std::string s = PyUnicode_AsUTF8(p);
+      int t = Option::str_to_type(s);
+      if (t >= 0) {
+	option.type = t;
+      }
+    }
+    p = PyDict_GetItemString(pOption, "desc");
+    if (p && PyObject_TypeCheck(p, &PyUnicode_Type)) {
+      option.desc = PyUnicode_AsUTF8(p);
+    }
+    p = PyDict_GetItemString(pOption, "long_desc");
+    if (p && PyObject_TypeCheck(p, &PyUnicode_Type)) {
+      option.long_desc = PyUnicode_AsUTF8(p);
+    }
+    p = PyDict_GetItemString(pOption, "default");
+    if (p) {
+      auto q = PyObject_Str(p);
+      option.default_value = PyUnicode_AsUTF8(q);
+      Py_DECREF(q);
+    }
+    p = PyDict_GetItemString(pOption, "min");
+    if (p) {
+      auto q = PyObject_Str(p);
+      option.min = PyUnicode_AsUTF8(q);
+      Py_DECREF(q);
+    }
+    p = PyDict_GetItemString(pOption, "max");
+    if (p) {
+      auto q = PyObject_Str(p);
+      option.max = PyUnicode_AsUTF8(q);
+      Py_DECREF(q);
+    }
+    p = PyDict_GetItemString(pOption, "enum_allowed");
+    if (p && PyObject_TypeCheck(p, &PyList_Type)) {
+      for (unsigned i = 0; i < PyList_Size(p); ++i) {
+	auto q = PyList_GetItem(p, i);
+	if (q) {
+	  auto r = PyObject_Str(q);
+	  option.enum_allowed.insert(PyUnicode_AsUTF8(r));
+	  Py_DECREF(r);
+	}
+      }
+    }
+    p = PyDict_GetItemString(pOption, "see_also");
+    if (p && PyObject_TypeCheck(p, &PyList_Type)) {
+      for (unsigned i = 0; i < PyList_Size(p); ++i) {
+	auto q = PyList_GetItem(p, i);
+	if (q && PyObject_TypeCheck(q, &PyUnicode_Type)) {
+	  option.see_also.insert(PyUnicode_AsUTF8(q));
+	}
+      }
+    }
+    p = PyDict_GetItemString(pOption, "tags");
+    if (p && PyObject_TypeCheck(p, &PyList_Type)) {
+      for (unsigned i = 0; i < PyList_Size(p); ++i) {
+	auto q = PyList_GetItem(p, i);
+	if (q && PyObject_TypeCheck(q, &PyUnicode_Type)) {
+	  option.tags.insert(PyUnicode_AsUTF8(q));
+	}
+      }
+    }
+    p = PyDict_GetItemString(pOption, "runtime");
+    if (p && PyObject_TypeCheck(p, &PyBool_Type)) {
+      if (p == Py_True) {
+	option.flags |= Option::FLAG_RUNTIME;
+      }
+      if (p == Py_False) {
+	option.flags &= ~Option::FLAG_RUNTIME;
+      }
+    }
+    dout(20) << "loaded module option " << option.name << dendl;
     options[option.name] = std::move(option);
-
     return 0;
   });
 
@@ -533,8 +617,20 @@ int PyModule::load_options()
 
 bool PyModule::is_option(const std::string &option_name)
 {
-  Mutex::Locker l(lock);
+  std::lock_guard l(lock);
   return options.count(option_name) > 0;
+}
+
+PyObject *PyModule::get_typed_option_value(const std::string& name,
+					   const std::string& value)
+{
+  // we don't need to hold a lock here because these MODULE_OPTIONS
+  // are set up exactly once during startup.
+  auto p = options.find(name);
+  if (p != options.end()) {
+    return get_python_typed_option_value((Option::type_t)p->second.type, value);
+  }
+  return PyUnicode_FromString(value.c_str());
 }
 
 int PyModule::load_subclass_of(const char* base_class, PyObject** py_class)
@@ -579,7 +675,7 @@ int PyModule::load_subclass_of(const char* base_class, PyObject** py_class)
     if (PyObject_RichCompareBool(value, mgr_module_type, Py_EQ)) {
       continue;
     }
-    auto class_name = PyString_AsString(key);
+    auto class_name = PyUnicode_AsUTF8(key);
     if (*py_class) {
       derr << __func__ << ": ignoring '"
 	   << module_name << "." << class_name << "'"

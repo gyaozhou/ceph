@@ -105,7 +105,7 @@ function TEST_repro_long_log2()
     local PRIMARY=$(ceph pg $PGID query  | jq '.info.stats.up_primary')
     kill_daemons $dir TERM osd.$PRIMARY || return 1
     CEPH_ARGS="--osd-max-pg-log-entries=2 --no-mon-config" ceph-objectstore-tool --data-path $dir/$PRIMARY --pgid $PGID --op trim-pg-log || return 1
-    run_osd $dir $PRIMARY || return 1
+    activate_osd $dir $PRIMARY || return 1
     wait_for_clean || return 1
     test_log_size $PGID 2 || return 1
 }
@@ -138,10 +138,11 @@ function TEST_trim_max_entries()
     rados -p test rm foo
     test_log_size $PGID 3
     rados -p test rm foo
-    test_log_size $PGID 4
-
+    test_log_size $PGID 3
     rados -p test rm foo
-    test_log_size $PGID 2
+    test_log_size $PGID 3
+    rados -p test rm foo
+    test_log_size $PGID 3
 }
 
 main repro-long-log "$@"

@@ -1013,7 +1013,7 @@ TEST(CrushWrapper, choose_args_compat) {
   item = 2;
   c.insert_item(g_ceph_context, item, weight, "osd.2", loc);
 
-  assert(c.add_simple_rule("rule1", "r11", "host", "",
+  ceph_assert(c.add_simple_rule("rule1", "r11", "host", "",
 			   "firstn", pg_pool_t::TYPE_ERASURE) >= 0);
 
   int id = c.get_item_id("b1");
@@ -1023,7 +1023,7 @@ TEST(CrushWrapper, choose_args_compat) {
   weight_set.size = 1;
   weight_set.weights = &weights;
   int maxbuckets = c.get_max_buckets();
-  assert(maxbuckets > 0);
+  ceph_assert(maxbuckets > 0);
   crush_choose_arg choose_args[maxbuckets];
   memset(choose_args, '\0', sizeof(crush_choose_arg) * maxbuckets);
   choose_args[-1-id].ids_size = 0;
@@ -1085,12 +1085,12 @@ TEST(CrushWrapper, remove_root) {
   loc["root"] = "default";
   c.insert_item(g_ceph_context, item, weight, "osd.2", loc);
 
-  assert(c.add_simple_rule("rule1", "r11", "host", "",
+  ceph_assert(c.add_simple_rule("rule1", "r11", "host", "",
 			   "firstn", pg_pool_t::TYPE_ERASURE) >= 0);
   ASSERT_TRUE(c.name_exists("default"));
   ASSERT_TRUE(c.name_exists("r11"));
   ASSERT_TRUE(c.name_exists("r12"));
-  ASSERT_EQ(c.remove_root(c.get_item_id("default")), 0);
+  ASSERT_EQ(c.remove_root(g_ceph_context, c.get_item_id("default")), 0);
   ASSERT_FALSE(c.name_exists("default"));
   ASSERT_FALSE(c.name_exists("r11"));
   ASSERT_FALSE(c.name_exists("r12"));
@@ -1122,7 +1122,7 @@ TEST(CrushWrapper, trim_roots_with_class) {
 
   ASSERT_TRUE(c.name_exists("default"));
   ASSERT_TRUE(c.name_exists("default~ssd"));
-  c.trim_roots_with_class();
+  c.trim_roots_with_class(g_ceph_context);
   ASSERT_TRUE(c.name_exists("default"));
   ASSERT_FALSE(c.name_exists("default~ssd"));
 }
@@ -1329,9 +1329,10 @@ TEST(CrushWrapper, try_remap_rule) {
     vector<int> orig = { 0, 3, 9 };
     set<int> overfull = { 3 };
     vector<int> underfull = { 0, 2, 5, 8, 11 };
+    vector<int> more_underfull = {};
     vector<int> out;
     int r = c.try_remap_rule(g_ceph_context, rule, 3,
-			      overfull, underfull,
+			      overfull, underfull, more_underfull,
 			      orig, &out);
     cout << orig << " -> r = " << (int)r << " out " << out << std::endl;
     ASSERT_EQ(r, 0);
@@ -1345,7 +1346,7 @@ TEST(CrushWrapper, try_remap_rule) {
     orig = {1, 3, 9};
 
     r = c.try_remap_rule(g_ceph_context, rule, 3,
-			 overfull, underfull,
+			 overfull, underfull, more_underfull,
 			 orig, &out);
     cout << orig << " -> r = " << (int)r << " out " << out << std::endl;
     ASSERT_EQ(r, 0);
@@ -1353,6 +1354,21 @@ TEST(CrushWrapper, try_remap_rule) {
     ASSERT_EQ(1, out[0]);
     ASSERT_EQ(0, out[1]);
     ASSERT_EQ(9, out[2]);
+    //
+    // Check that more_underfull is used when underfull runs out
+    orig = { 0, 3, 9 };
+    overfull = { 3, 9 };
+    underfull = { 2 };
+    more_underfull = { 5, 8, 11 };
+    r = c.try_remap_rule(g_ceph_context, rule, 3,
+			      overfull, underfull, more_underfull,
+			      orig, &out);
+    cout << orig << " -> r = " << (int)r << " out " << out << std::endl;
+    ASSERT_EQ(r, 0);
+    ASSERT_EQ(3u, out.size());
+    ASSERT_EQ(0, out[0]);
+    ASSERT_EQ(2, out[1]);
+    ASSERT_EQ(5, out[2]);
   }
 
   // chooseleaf
@@ -1366,9 +1382,10 @@ TEST(CrushWrapper, try_remap_rule) {
     vector<int> orig = { 0, 3, 9 };
     set<int> overfull = { 3 };
     vector<int> underfull = { 0, 2, 5, 8, 11 };
+    vector<int> more_underfull = { };
     vector<int> out;
     int r = c.try_remap_rule(g_ceph_context, rule, 3,
-			      overfull, underfull,
+			      overfull, underfull, more_underfull,
 			      orig, &out);
     cout << orig << " -> r = " << (int)r << " out " << out << std::endl;
     ASSERT_EQ(r, 0);
@@ -1392,9 +1409,10 @@ TEST(CrushWrapper, try_remap_rule) {
     vector<int> orig = { 0, 3, 16, 12 };
     set<int> overfull = { 3, 12 };
     vector<int> underfull = { 6, 7, 9, 3, 0, 1, 15, 16, 13, 2, 5, 8, 11 };
+    vector<int> more_underfull = { };
     vector<int> out;
     int r = c.try_remap_rule(g_ceph_context, rule, 3,
-			      overfull, underfull,
+			      overfull, underfull, more_underfull,
 			      orig, &out);
     cout << orig << " -> r = " << (int)r << " out " << out << std::endl;
     ASSERT_EQ(r, 0);
@@ -1407,7 +1425,7 @@ TEST(CrushWrapper, try_remap_rule) {
     orig.pop_back();
     out.clear();
     r = c.try_remap_rule(g_ceph_context, rule, 3,
-			 overfull, underfull,
+			 overfull, underfull, more_underfull,
 			 orig, &out);
     cout << orig << " -> r = " << (int)r << " out " << out << std::endl;
     ASSERT_EQ(r, 0);

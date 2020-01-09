@@ -21,11 +21,11 @@
 class MGetPoolStats : public PaxosServiceMessage {
 public:
   uuid_d fsid;
-  list<string> pools;
+  std::list<std::string> pools;
 
-  MGetPoolStats() : PaxosServiceMessage(MSG_GETPOOLSTATS, 0) {}
-  MGetPoolStats(const uuid_d& f, ceph_tid_t t, list<string>& ls, version_t l) :
-    PaxosServiceMessage(MSG_GETPOOLSTATS, l),
+  MGetPoolStats() : PaxosServiceMessage{MSG_GETPOOLSTATS, 0} {}
+  MGetPoolStats(const uuid_d& f, ceph_tid_t t, std::list<std::string>& ls, version_t l) :
+    PaxosServiceMessage{MSG_GETPOOLSTATS, l},
     fsid(f), pools(ls) {
     set_tid(t);
   }
@@ -34,8 +34,8 @@ private:
   ~MGetPoolStats() override {}
 
 public:
-  const char *get_type_name() const override { return "getpoolstats"; }
-  void print(ostream& out) const override {
+  std::string_view get_type_name() const override { return "getpoolstats"; }
+  void print(std::ostream& out) const override {
     out << "getpoolstats(" << get_tid() << " " << pools << " v" << version << ")";
   }
 

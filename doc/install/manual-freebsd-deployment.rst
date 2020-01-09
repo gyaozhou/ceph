@@ -53,20 +53,20 @@ Current implementation works on ZFS pools
 * One ZFS pool is allocated per OSD, like::
 
     gpart create -s GPT ada1
-    gpart add -t freebsd-zfs -l osd1 ada1
-    zpool create -o mountpoint=/var/lib/ceph/osd/osd.1 osd
+    gpart add -t freebsd-zfs -l osd.1 ada1
+    zpool create -m /var/lib/ceph/osd/osd.1 osd.1 gpt/osd.1
 
 * Some cache and log (ZIL) can be attached.
   Please note that this is different from the Ceph journals. Cache and log are
-  totally transparent for Ceph, and help the filesystem to keep the system
-  consistant and help performance.
+  totally transparent for Ceph, and help the file system to keep the system
+  consistent and help performance.
   Assuming that ada2 is an SSD::
 
     gpart create -s GPT ada2
-    gpart add -t freebsd-zfs -l osd1-log -s 1G ada2
-    zpool add osd1 log gpt/osd1-log
-    gpart add -t freebsd-zfs -l osd1-cache -s 10G ada2
-    zpool add osd1 log gpt/osd1-cache
+    gpart add -t freebsd-zfs -l osd.1-log -s 1G ada2
+    zpool add osd.1 log gpt/osd.1-log
+    gpart add -t freebsd-zfs -l osd.1-cache -s 10G ada2
+    zpool add osd.1 log gpt/osd.1-cache
 
 * Note: *UFS2 does not allow large xattribs*
 
@@ -94,7 +94,7 @@ a number of things:
 
 - **Unique Identifier:** The ``fsid`` is a unique identifier for the cluster,
   and stands for File System ID from the days when the Ceph Storage Cluster was
-  principally for the Ceph Filesystem. Ceph now supports native interfaces,
+  principally for the Ceph File System. Ceph now supports native interfaces,
   block devices, and object storage gateway interfaces too, so ``fsid`` is a
   bit of a misnomer.
 
@@ -104,7 +104,7 @@ a number of things:
   especially useful when you are working with multiple clusters and you need to
   clearly understand which cluster your are working with.
 
-  For example, when you run multiple clusters in a `federated architecture`_,
+  For example, when you run multiple clusters in a :ref:`multisite configuration <multisite>`,
   the cluster name (e.g., ``us-west``, ``us-east``) identifies the cluster for
   the current CLI session. **Note:** To identify the cluster name on the
   command line interface, specify the a Ceph configuration file with the
@@ -211,7 +211,7 @@ The procedure is as follows:
 #. Generate an administrator keyring, generate a ``client.admin`` user and add
    the user to the keyring. ::
 
-	sudo ceph-authtool --create-keyring /etc/ceph/ceph.client.admin.keyring --gen-key -n client.admin --set-uid=0 --cap mon 'allow *' --cap osd 'allow *' --cap mds 'allow *' --cap mgr 'allow *'
+	sudo ceph-authtool --create-keyring /etc/ceph/ceph.client.admin.keyring --gen-key -n client.admin --cap mon 'allow *' --cap osd 'allow *' --cap mds 'allow *' --cap mgr 'allow *'
 
 
 #. Add the ``client.admin`` key to the ``ceph.mon.keyring``. ::
@@ -544,7 +544,7 @@ In the below instructions, ``{id}`` is an arbitrary name, such as the hostname o
 
    Then make sure you do not have a keyring set in ceph.conf in the global section; move it to the client section; or add a keyring setting specific to this mds daemon. And verify that you see the same key in the mds data directory and ``ceph auth get mds.{id}`` output.
 
-#. Now you are ready to `create a Ceph filesystem`_.
+#. Now you are ready to `create a Ceph file system`_.
 
 
 Summary
@@ -572,10 +572,9 @@ To add (or remove) additional monitors, see `Add/Remove Monitors`_.
 To add (or remove) additional Ceph OSD Daemons, see `Add/Remove OSDs`_.
 
 
-.. _federated architecture: ../../radosgw/federated-config
 .. _Installation (Quick): ../../start
 .. _Add/Remove Monitors: ../../rados/operations/add-or-rm-mons
 .. _Add/Remove OSDs: ../../rados/operations/add-or-rm-osds
 .. _Network Configuration Reference: ../../rados/configuration/network-config-ref
 .. _Monitor Config Reference - Data: ../../rados/configuration/mon-config-ref#data
-.. _create a Ceph filesystem: ../../cephfs/createfs
+.. _create a Ceph file system: ../../cephfs/createfs

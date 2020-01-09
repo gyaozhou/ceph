@@ -102,7 +102,7 @@ public:
 	       j != i->second.end();
 	       ++j) {
 	    f->open_object_section("pull_info");
-	    assert(pulling.count(*j));
+	    ceph_assert(pulling.count(*j));
 	    pulling.find(*j)->second.dump(f);
 	    f->close_section();
 	  }
@@ -146,6 +146,12 @@ public:
     const hobject_t &hoid,
     uint64_t off,
     uint64_t len,
+    uint32_t op_flags,
+    bufferlist *bl) override;
+
+  int objects_readv_sync(
+    const hobject_t &hoid,
+    map<uint64_t, uint64_t>&& m,
     uint32_t op_flags,
     bufferlist *bl) override;
 
@@ -244,7 +250,7 @@ private:
     list<pull_complete_info> *to_continue,
     ObjectStore::Transaction *t);
   void handle_push(pg_shard_t from, const PushOp &op, PushReplyOp *response,
-		   ObjectStore::Transaction *t);
+		   ObjectStore::Transaction *t, bool is_repair);
 
   static void trim_pushed_data(const interval_set<uint64_t> &copy_subset,
 			       const interval_set<uint64_t> &intervals_received,
@@ -268,7 +274,9 @@ private:
   void submit_push_data(const ObjectRecoveryInfo &recovery_info,
 			bool first,
 			bool complete,
+			bool clear_omap,
 			bool cache_dont_need,
+			interval_set<uint64_t> &data_zeros,
 			const interval_set<uint64_t> &intervals_included,
 			bufferlist data_included,
 			bufferlist omap_header,
@@ -331,18 +339,17 @@ private:
     Context *on_commit;
     OpRequestRef op;
     eversion_t v;
-    InProgressOp(
-      ceph_tid_t tid, Context *on_commit,
-      OpRequestRef op, eversion_t v)
-      : RefCountedObject(nullptr, 0),
-	tid(tid), on_commit(on_commit),
-	op(op), v(v) {}
     bool done() const {
       return waiting_for_commit.empty();
     }
+  private:
+    FRIEND_MAKE_REF(InProgressOp);
+    InProgressOp(ceph_tid_t tid, Context *on_commit, OpRequestRef op, eversion_t v)
+      :
+	tid(tid), on_commit(on_commit),
+	op(op), v(v) {}
   };
-  typedef boost::intrusive_ptr<InProgressOp> InProgressOpRef;
-  map<ceph_tid_t, InProgressOpRef> in_progress_ops;
+  map<ceph_tid_t, ceph::ref_t<InProgressOp>> in_progress_ops;
 public:
   friend class C_OSD_OnOpCommit;
 
@@ -358,9 +365,9 @@ public:
     const eversion_t &at_version,
     PGTransactionUPtr &&t,
     const eversion_t &trim_to,
-    const eversion_t &roll_forward_to,
+    const eversion_t &min_last_complete_ondisk,
     const vector<pg_log_entry_t> &log_entries,
-    boost::optional<pg_hit_set_history_t> &hset_history,
+    std::optional<pg_hit_set_history_t> &hset_history,
     Context *on_all_commit,
     ceph_tid_t tid,
     osd_reqid_t reqid,
@@ -374,11 +381,11 @@ private:
     ceph_tid_t tid,
     osd_reqid_t reqid,
     eversion_t pg_trim_to,
-    eversion_t pg_roll_forward_to,
+    eversion_t min_last_complete_ondisk,
     hobject_t new_temp_oid,
     hobject_t discard_temp_oid,
     const bufferlist &log_entries,
-    boost::optional<pg_hit_set_history_t> &hset_history,
+    std::optional<pg_hit_set_history_t> &hset_history,
     ObjectStore::Transaction &op_t,
     pg_shard_t peer,
     const pg_info_t &pinfo);
@@ -388,14 +395,14 @@ private:
     ceph_tid_t tid,
     osd_reqid_t reqid,
     eversion_t pg_trim_to,
-    eversion_t pg_roll_forward_to,
+    eversion_t min_last_complete_ondisk,
     hobject_t new_temp_oid,
     hobject_t discard_temp_oid,
     const vector<pg_log_entry_t> &log_entries,
-    boost::optional<pg_hit_set_history_t> &hset_history,
+    std::optional<pg_hit_set_history_t> &hset_history,
     InProgressOp *op,
     ObjectStore::Transaction &op_t);
-  void op_commit(InProgressOpRef& op);
+  void op_commit(const ceph::ref_t<InProgressOp>& op);
   void do_repop_reply(OpRequestRef op);
   void do_repop(OpRequestRef op);
 
@@ -416,7 +423,7 @@ private:
   struct C_OSD_RepModifyCommit;
 
   void repop_commit(RepModifyRef rm);
-  bool auto_repair_supported() const override { return false; }
+  bool auto_repair_supported() const override { return store->has_builtin_csum(); }
 
 
   int be_deep_scrub(

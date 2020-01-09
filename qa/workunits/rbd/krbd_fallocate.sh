@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 
-# This documents the state of things as of 4.12-rc4.
-#
 # - fallocate -z deallocates because BLKDEV_ZERO_NOUNMAP hint is ignored by
 # krbd
 #
-# - unaligned fallocate -z/-p appear to not deallocate -- see caveat #2 in
-# linux.git commit 6ac56951dc10 ("rbd: implement REQ_OP_WRITE_ZEROES")
+# - big unaligned blkdiscard and fallocate -z/-p leave the objects in place
 
 set -ex
 
@@ -14,7 +11,7 @@ set -ex
 function py_blkdiscard() {
     local offset=$1
 
-    python <<EOF
+    python3 <<EOF
 import fcntl, struct
 BLKDISCARD = 0x1277
 with open('$DEV', 'w') as dev:
@@ -27,7 +24,7 @@ function py_fallocate() {
     local mode=$1
     local offset=$2
 
-    python <<EOF
+    python3 <<EOF
 import os, ctypes, ctypes.util
 FALLOC_FL_KEEP_SIZE = 0x01
 FALLOC_FL_PUNCH_HOLE = 0x02
@@ -77,7 +74,7 @@ $(printf %x $IMAGE_SIZE)
 EOF
     [[ $(rados -p rbd ls | grep -c rbd_data.$IMAGE_ID) -eq $num_objects_expected ]]
     for ((i = 0; i < $num_objects_expected; i++)); do
-        rados -p rbd stat rbd_data.$IMAGE_ID.$(printf %016x $i) | grep "size $((OBJECT_SIZE / 2))"
+        rados -p rbd stat rbd_data.$IMAGE_ID.$(printf %016x $i) | egrep "(size $((OBJECT_SIZE / 2)))|(size 0)"
     done
 }
 
@@ -85,13 +82,13 @@ IMAGE_NAME="fallocate-test"
 
 rbd create --size 200 $IMAGE_NAME
 
-IMAGE_SIZE=$(rbd info --format=json $IMAGE_NAME | python -c 'import sys, json; print json.load(sys.stdin)["size"]')
-OBJECT_SIZE=$(rbd info --format=json $IMAGE_NAME | python -c 'import sys, json; print json.load(sys.stdin)["object_size"]')
+IMAGE_SIZE=$(rbd info --format=json $IMAGE_NAME | python3 -c 'import sys, json; print(json.load(sys.stdin)["size"])')
+OBJECT_SIZE=$(rbd info --format=json $IMAGE_NAME | python3 -c 'import sys, json; print(json.load(sys.stdin)["object_size"])')
 NUM_OBJECTS=$((IMAGE_SIZE / OBJECT_SIZE))
 [[ $((IMAGE_SIZE % OBJECT_SIZE)) -eq 0 ]]
 
 IMAGE_ID="$(rbd info --format=json $IMAGE_NAME |
-    python -c "import sys, json; print json.load(sys.stdin)['block_name_prefix'].split('.')[1]")"
+    python3 -c "import sys, json; print(json.load(sys.stdin)['block_name_prefix'].split('.')[1])")"
 
 DEV=$(sudo rbd map $IMAGE_NAME)
 
@@ -118,7 +115,7 @@ assert_zeroes 0
 # unaligned blkdev_issue_discard
 allocate
 py_blkdiscard $((OBJECT_SIZE / 2))
-assert_zeroes_unaligned 1
+assert_zeroes_unaligned $NUM_OBJECTS
 
 # unaligned blkdev_issue_zeroout w/ BLKDEV_ZERO_NOUNMAP
 allocate

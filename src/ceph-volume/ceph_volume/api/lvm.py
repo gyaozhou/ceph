@@ -7,7 +7,7 @@ import logging
 import os
 import uuid
 from math import floor
-from ceph_volume import process
+from ceph_volume import process, util
 from ceph_volume.exceptions import (
     MultipleLVsError, MultipleVGsError,
     MultiplePVsError, SizeAllocationError
@@ -21,7 +21,7 @@ def _output_parser(output, fields):
     Newer versions of LVM allow ``--reportformat=json``, but older versions,
     like the one included in Xenial do not. LVM has the ability to filter and
     format its output so we assume the output will be in a format this parser
-    can handle (using ',' as a delimiter)
+    can handle (using ';' as a delimiter)
 
     :param fields: A string, possibly using ',' to group many items, as it
                    would be used on the CLI
@@ -40,10 +40,10 @@ def _output_parser(output, fields):
         if not line:
             continue
 
-        # spliting on ';' because that is what the lvm call uses as
+        # splitting on ';' because that is what the lvm call uses as
         # '--separator'
         output_items = [i.strip() for i in line.split(';')]
-        # map the output to the fiels
+        # map the output to the fields
         report.append(
             dict(zip(field_items, output_items))
         )
@@ -67,8 +67,13 @@ def _splitname_parser(line):
 
     :returns: dictionary with stripped prefixes
     """
-    parts = line[0].split(';')
     parsed = {}
+    try:
+        parts = line[0].split(';')
+    except IndexError:
+        logger.exception('Unable to parse mapper device: %s', line)
+        return parsed
+
     for part in parts:
         part = part.replace("'", '')
         key, value = part.split('=')
@@ -78,6 +83,51 @@ def _splitname_parser(line):
         parsed[key] = value
 
     return parsed
+
+
+def sizing(device_size, parts=None, size=None):
+    """
+    Calculate proper sizing to fully utilize the volume group in the most
+    efficient way possible. To prevent situations where LVM might accept
+    a percentage that is beyond the vg's capabilities, it will refuse with
+    an error when requesting a larger-than-possible parameter, in addition
+    to rounding down calculations.
+
+    A dictionary with different sizing parameters is returned, to make it
+    easier for others to choose what they need in order to create logical
+    volumes::
+
+        >>> sizing(100, parts=2)
+        >>> {'parts': 2, 'percentages': 50, 'sizes': 50}
+
+    """
+    if parts is not None and size is not None:
+        raise ValueError(
+            "Cannot process sizing with both parts (%s) and size (%s)" % (parts, size)
+        )
+
+    if size and size > device_size:
+        raise SizeAllocationError(size, device_size)
+
+    def get_percentage(parts):
+        return int(floor(100 / float(parts)))
+
+    if parts is not None:
+        # Prevent parts being 0, falling back to 1 (100% usage)
+        parts = parts or 1
+        percentages = get_percentage(parts)
+
+    if size:
+        parts = int(device_size / size) or 1
+        percentages = get_percentage(parts)
+
+    sizes = device_size / parts if parts else int(floor(device_size))
+
+    return {
+        'parts': parts,
+        'percentages': percentages,
+        'sizes': int(sizes),
+    }
 
 
 def parse_tags(lv_tags):
@@ -217,18 +267,257 @@ def dmsetup_splitname(dev):
     return _splitname_parser(out)
 
 
-def is_lv(dev, lvs=None):
+####################################
+#
+# Code for LVM Physical Volumes
+#
+################################
+
+PV_FIELDS = 'pv_name,pv_tags,pv_uuid,vg_name,lv_uuid'
+
+def get_api_pvs():
     """
-    Boolean to detect if a device is an LV or not.
+    Return the list of physical volumes configured for lvm and available in the
+    system using flags to include common metadata associated with them like the uuid
+
+    This will only return physical volumes set up to work with LVM.
+
+    Command and delimited output should look like::
+
+        $ pvs --noheadings --readonly --separator=';' -o pv_name,pv_tags,pv_uuid
+          /dev/sda1;;
+          /dev/sdv;;07A4F654-4162-4600-8EB3-88D1E42F368D
+
     """
-    splitname = dmsetup_splitname(dev)
-    # Allowing to optionally pass `lvs` can help reduce repetitive checks for
-    # multiple devices at once.
-    lvs = lvs if lvs is not None else Volumes()
-    if splitname.get('LV_NAME'):
-        lvs.filter(lv_name=splitname['LV_NAME'], vg_name=splitname['VG_NAME'])
-        return len(lvs) > 0
-    return False
+    stdout, stderr, returncode = process.call(
+        ['pvs', '--no-heading', '--readonly', '--separator=";"', '-o',
+         PV_FIELDS],
+        verbose_on_failure=False
+    )
+
+    return _output_parser(stdout, PV_FIELDS)
+
+
+class PVolume(object):
+    """
+    Represents a Physical Volume from LVM, with some top-level attributes like
+    ``pv_name`` and parsed tags as a dictionary of key/value pairs.
+    """
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+        self.pv_api = kw
+        self.name = kw['pv_name']
+        self.tags = parse_tags(kw['pv_tags'])
+
+    def __str__(self):
+        return '<%s>' % self.pv_api['pv_name']
+
+    def __repr__(self):
+        return self.__str__()
+
+    def set_tags(self, tags):
+        """
+        :param tags: A dictionary of tag names and values, like::
+
+            {
+                "ceph.osd_fsid": "aaa-fff-bbbb",
+                "ceph.osd_id": "0"
+            }
+
+        At the end of all modifications, the tags are refreshed to reflect
+        LVM's most current view.
+        """
+        for k, v in tags.items():
+            self.set_tag(k, v)
+        # after setting all the tags, refresh them for the current object, use the
+        # pv_* identifiers to filter because those shouldn't change
+        pv_object = get_pv(pv_name=self.pv_name, pv_uuid=self.pv_uuid)
+        self.tags = pv_object.tags
+
+    def set_tag(self, key, value):
+        """
+        Set the key/value pair as an LVM tag. Does not "refresh" the values of
+        the current object for its tags. Meant to be a "fire and forget" type
+        of modification.
+
+        **warning**: Altering tags on a PV has to be done ensuring that the
+        device is actually the one intended. ``pv_name`` is *not* a persistent
+        value, only ``pv_uuid`` is. Using ``pv_uuid`` is the best way to make
+        sure the device getting changed is the one needed.
+        """
+        # remove it first if it exists
+        if self.tags.get(key):
+            current_value = self.tags[key]
+            tag = "%s=%s" % (key, current_value)
+            process.call(['pvchange', '--deltag', tag, self.pv_name])
+
+        process.call(
+            [
+                'pvchange',
+                '--addtag', '%s=%s' % (key, value), self.pv_name
+            ]
+        )
+
+
+class PVolumes(list):
+    """
+    A list of all known (physical) volumes for the current system, with the ability
+    to filter them via keyword arguments.
+    """
+
+    def __init__(self, populate=True):
+        if populate:
+            self._populate()
+
+    def _populate(self):
+        # get all the pvs in the current system
+        for pv_item in get_api_pvs():
+            self.append(PVolume(**pv_item))
+
+    def _purge(self):
+        """
+        Deplete all the items in the list, used internally only so that we can
+        dynamically allocate the items when filtering without the concern of
+        messing up the contents
+        """
+        self[:] = []
+
+    def _filter(self, pv_name=None, pv_uuid=None, pv_tags=None):
+        """
+        The actual method that filters using a new list. Useful so that other
+        methods that do not want to alter the contents of the list (e.g.
+        ``self.find``) can operate safely.
+        """
+        filtered = [i for i in self]
+        if pv_name:
+            filtered = [i for i in filtered if i.pv_name == pv_name]
+
+        if pv_uuid:
+            filtered = [i for i in filtered if i.pv_uuid == pv_uuid]
+
+        # at this point, `filtered` has either all the physical volumes in self
+        # or is an actual filtered list if any filters were applied
+        if pv_tags:
+            tag_filtered = []
+            for pvolume in filtered:
+                matches = all(pvolume.tags.get(k) == str(v) for k, v in pv_tags.items())
+                if matches:
+                    tag_filtered.append(pvolume)
+            # return the tag_filtered pvolumes here, the `filtered` list is no
+            # longer usable
+            return tag_filtered
+
+        return filtered
+
+    def filter(self, pv_name=None, pv_uuid=None, pv_tags=None):
+        """
+        Filter out volumes on top level attributes like ``pv_name`` or by
+        ``pv_tags`` where a dict is required. For example, to find a physical
+        volume that has an OSD ID of 0, the filter would look like::
+
+            pv_tags={'ceph.osd_id': '0'}
+
+        """
+        if not any([pv_name, pv_uuid, pv_tags]):
+            raise TypeError('.filter() requires pv_name, pv_uuid, or pv_tags'
+                            '(none given)')
+
+        filtered_pvs = PVolumes(populate=False)
+        filtered_pvs.extend(self._filter(pv_name, pv_uuid, pv_tags))
+        return filtered_pvs
+
+    def get(self, pv_name=None, pv_uuid=None, pv_tags=None):
+        """
+        This is a bit expensive, since it will try to filter out all the
+        matching items in the list, filter them out applying anything that was
+        added and return the matching item.
+
+        This method does *not* alter the list, and it will raise an error if
+        multiple pvs are matched
+
+        It is useful to use ``tags`` when trying to find a specific logical volume,
+        but it can also lead to multiple pvs being found, since a lot of metadata
+        is shared between pvs of a distinct OSD.
+        """
+        if not any([pv_name, pv_uuid, pv_tags]):
+            return None
+        pvs = self._filter(
+            pv_name=pv_name,
+            pv_uuid=pv_uuid,
+            pv_tags=pv_tags
+        )
+        if not pvs:
+            return None
+        if len(pvs) > 1 and pv_tags:
+            raise MultiplePVsError(pv_name)
+        return pvs[0]
+
+
+def create_pv(device):
+    """
+    Create a physical volume from a device, useful when devices need to be later mapped
+    to journals.
+    """
+    process.run([
+        'pvcreate',
+        '-v',  # verbose
+        '-f',  # force it
+        '--yes', # answer yes to any prompts
+        device
+    ])
+
+
+def remove_pv(pv_name):
+    """
+    Removes a physical volume using a double `-f` to prevent prompts and fully
+    remove anything related to LVM. This is tremendously destructive, but so is all other actions
+    when zapping a device.
+
+    In the case where multiple PVs are found, it will ignore that fact and
+    continue with the removal, specifically in the case of messages like::
+
+        WARNING: PV $UUID /dev/DEV-1 was already found on /dev/DEV-2
+
+    These situations can be avoided with custom filtering rules, which this API
+    cannot handle while accommodating custom user filters.
+    """
+    fail_msg = "Unable to remove vg %s" % pv_name
+    process.run(
+        [
+            'pvremove',
+            '-v',  # verbose
+            '-f',  # force it
+            '-f',  # force it
+            pv_name
+        ],
+        fail_msg=fail_msg,
+    )
+
+
+def get_pv(pv_name=None, pv_uuid=None, pv_tags=None, pvs=None):
+    """
+    Return a matching pv (physical volume) for the current system, requiring
+    ``pv_name``, ``pv_uuid``, or ``pv_tags``. Raises an error if more than one
+    pv is found.
+    """
+    if not any([pv_name, pv_uuid, pv_tags]):
+        return None
+    if pvs is None or len(pvs) == 0:
+        pvs = PVolumes()
+
+    return pvs.get(pv_name=pv_name, pv_uuid=pv_uuid, pv_tags=pv_tags)
+
+
+################################
+#
+# Code for LVM Volume Groups
+#
+#############################
+
+#TODO add vg_extent_size here to have that available in VolumeGroup class
+VG_FIELDS = 'vg_name,pv_count,lv_count,snap_count,vg_attr,vg_size,vg_free,vg_free_count'
 
 
 def get_api_vgs():
@@ -246,295 +535,121 @@ def get_api_vgs():
     To normalize sizing, the units are forced in 'g' which is equivalent to
     gigabytes, which uses multiples of 1024 (as opposed to 1000)
     """
-    fields = 'vg_name,pv_count,lv_count,snap_count,vg_attr,vg_size,vg_free'
     stdout, stderr, returncode = process.call(
-        ['vgs', '--noheadings', '--readonly', '--units=g', '--separator=";"', '-o', fields]
+        ['vgs', '--noheadings', '--readonly', '--units=g', '--separator=";"',
+         '-o', VG_FIELDS],
+        verbose_on_failure=False
     )
-    return _output_parser(stdout, fields)
+    return _output_parser(stdout, VG_FIELDS)
 
 
-def get_api_lvs():
+class VolumeGroup(object):
     """
-    Return the list of logical volumes available in the system using flags to include common
-    metadata associated with them
-
-    Command and delimited output should look like::
-
-        $ lvs --noheadings --readonly --separator=';' -o lv_tags,lv_path,lv_name,vg_name
-          ;/dev/ubuntubox-vg/root;root;ubuntubox-vg
-          ;/dev/ubuntubox-vg/swap_1;swap_1;ubuntubox-vg
-
+    Represents an LVM group, with some top-level attributes like ``vg_name``
     """
-    fields = 'lv_tags,lv_path,lv_name,vg_name,lv_uuid,lv_size'
-    stdout, stderr, returncode = process.call(
-        ['lvs', '--noheadings', '--readonly', '--separator=";"', '-o', fields]
-    )
-    return _output_parser(stdout, fields)
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+        self.name = kw['vg_name']
+        self.tags = parse_tags(kw.get('vg_tags', ''))
+
+    def __str__(self):
+        return '<%s>' % self.name
+
+    def __repr__(self):
+        return self.__str__()
+
+    def _parse_size(self, size):
+        error_msg = "Unable to convert vg size to integer: '%s'" % str(size)
+        try:
+            integer, _ = size.split('g')
+        except ValueError:
+            logger.exception(error_msg)
+            raise RuntimeError(error_msg)
+
+        return util.str_to_int(integer)
+
+    @property
+    def free(self):
+        """
+        Parse the available size in gigabytes from the ``vg_free`` attribute, that
+        will be a string with a character ('g') to indicate gigabytes in size.
+        Returns a rounded down integer to ease internal operations::
+
+        >>> data_vg.vg_free
+        '0.01g'
+        >>> data_vg.size
+        0
+        """
+        return self._parse_size(self.vg_free)
+
+    @property
+    def size(self):
+        """
+        Parse the size in gigabytes from the ``vg_size`` attribute, that
+        will be a string with a character ('g') to indicate gigabytes in size.
+        Returns a rounded down integer to ease internal operations::
+
+        >>> data_vg.vg_size
+        '1024.9g'
+        >>> data_vg.size
+        1024
+        """
+        return self._parse_size(self.vg_size)
+
+    def sizing(self, parts=None, size=None):
+        """
+        Calculate proper sizing to fully utilize the volume group in the most
+        efficient way possible. To prevent situations where LVM might accept
+        a percentage that is beyond the vg's capabilities, it will refuse with
+        an error when requesting a larger-than-possible parameter, in addition
+        to rounding down calculations.
+
+        A dictionary with different sizing parameters is returned, to make it
+        easier for others to choose what they need in order to create logical
+        volumes::
+
+        >>> data_vg.free
+        1024
+        >>> data_vg.sizing(parts=4)
+        {'parts': 4, 'sizes': 256, 'percentages': 25}
+        >>> data_vg.sizing(size=512)
+        {'parts': 2, 'sizes': 512, 'percentages': 50}
 
 
-def get_api_pvs():
-    """
-    Return the list of physical volumes configured for lvm and available in the
-    system using flags to include common metadata associated with them like the uuid
+        :param parts: Number of parts to create LVs from
+        :param size: Size in gigabytes to divide the VG into
 
-    This will only return physical volumes set up to work with LVM.
+        :raises SizeAllocationError: When requested size cannot be allocated with
+        :raises ValueError: If both ``parts`` and ``size`` are given
+        """
+        if parts is not None and size is not None:
+            raise ValueError(
+                "Cannot process sizing with both parts (%s) and size (%s)" % (parts, size)
+            )
 
-    Command and delimited output should look like::
+        # if size is given we need to map that to extents so that we avoid
+        # issues when trying to get this right with a size in gigabytes find
+        # the percentage first, cheating, because these values are thrown out
+        vg_free_count = util.str_to_int(self.vg_free_count)
 
-        $ pvs --noheadings --readonly --separator=';' -o pv_name,pv_tags,pv_uuid
-          /dev/sda1;;
-          /dev/sdv;;07A4F654-4162-4600-8EB3-88D1E42F368D
+        if size:
+            extents = int(size * vg_free_count / self.free)
+            disk_sizing = sizing(self.free, size=size, parts=parts)
+        else:
+            if parts is not None:
+                # Prevent parts being 0, falling back to 1 (100% usage)
+                parts = parts or 1
+            size = int(self.free / parts)
+            extents = size * vg_free_count / self.free
+            disk_sizing = sizing(self.free, parts=parts)
 
-    """
-    fields = 'pv_name,pv_tags,pv_uuid,vg_name,lv_uuid'
+        extent_sizing = sizing(vg_free_count, size=extents)
 
-    stdout, stderr, returncode = process.call(
-        ['pvs', '--no-heading', '--readonly', '--separator=";"', '-o', fields]
-    )
-
-    return _output_parser(stdout, fields)
-
-
-def get_lv_from_argument(argument):
-    """
-    Helper proxy function that consumes a possible logical volume passed in from the CLI
-    in the form of `vg/lv`, but with some validation so that an argument that is a full
-    path to a device can be ignored
-    """
-    if argument.startswith('/'):
-        lv = get_lv(lv_path=argument)
-        return lv
-    try:
-        vg_name, lv_name = argument.split('/')
-    except (ValueError, AttributeError):
-        return None
-    return get_lv(lv_name=lv_name, vg_name=vg_name)
-
-
-def get_lv(lv_name=None, vg_name=None, lv_path=None, lv_uuid=None, lv_tags=None):
-    """
-    Return a matching lv for the current system, requiring ``lv_name``,
-    ``vg_name``, ``lv_path`` or ``tags``. Raises an error if more than one lv
-    is found.
-
-    It is useful to use ``tags`` when trying to find a specific logical volume,
-    but it can also lead to multiple lvs being found, since a lot of metadata
-    is shared between lvs of a distinct OSD.
-    """
-    if not any([lv_name, vg_name, lv_path, lv_uuid, lv_tags]):
-        return None
-    lvs = Volumes()
-    return lvs.get(
-        lv_name=lv_name, vg_name=vg_name, lv_path=lv_path, lv_uuid=lv_uuid,
-        lv_tags=lv_tags
-    )
-
-
-def get_pv(pv_name=None, pv_uuid=None, pv_tags=None):
-    """
-    Return a matching pv (physical volume) for the current system, requiring
-    ``pv_name``, ``pv_uuid``, or ``pv_tags``. Raises an error if more than one
-    pv is found.
-    """
-    if not any([pv_name, pv_uuid, pv_tags]):
-        return None
-    pvs = PVolumes()
-    return pvs.get(pv_name=pv_name, pv_uuid=pv_uuid, pv_tags=pv_tags)
-
-
-def create_pv(device):
-    """
-    Create a physical volume from a device, useful when devices need to be later mapped
-    to journals.
-    """
-    process.run([
-        'pvcreate',
-        '-v',  # verbose
-        '-f',  # force it
-        '--yes', # answer yes to any prompts
-        device
-    ])
-
-
-def create_vg(name, *devices):
-    """
-    Create a Volume Group. Command looks like::
-
-        vgcreate --force --yes group_name device
-
-    Once created the volume group is returned as a ``VolumeGroup`` object
-    """
-    process.run([
-        'vgcreate',
-        '--force',
-        '--yes',
-        name] + list(devices)
-    )
-
-    vg = get_vg(vg_name=name)
-    return vg
-
-
-def remove_vg(vg_name):
-    """
-    Removes a volume group.
-    """
-    fail_msg = "Unable to remove vg %s" % vg_name
-    process.run(
-        [
-            'vgremove',
-            '-v',  # verbose
-            '-f',  # force it
-            vg_name
-        ],
-        fail_msg=fail_msg,
-    )
-
-
-def remove_pv(pv_name):
-    """
-    Removes a physical volume.
-    """
-    fail_msg = "Unable to remove vg %s" % pv_name
-    process.run(
-        [
-            'pvremove',
-            '-v',  # verbose
-            '-f',  # force it
-            pv_name
-        ],
-        fail_msg=fail_msg,
-    )
-
-
-def remove_lv(path):
-    """
-    Removes a logical volume given it's absolute path.
-
-    Will return True if the lv is successfully removed or
-    raises a RuntimeError if the removal fails.
-    """
-    stdout, stderr, returncode = process.call(
-        [
-            'lvremove',
-            '-v',  # verbose
-            '-f',  # force it
-            path
-        ],
-        show_command=True,
-        terminal_verbose=True,
-    )
-    if returncode != 0:
-        raise RuntimeError("Unable to remove %s" % path)
-    return True
-
-
-def create_lv(name, group, size=None, tags=None):
-    """
-    Create a Logical Volume in a Volume Group. Command looks like::
-
-        lvcreate -L 50G -n gfslv vg0
-
-    ``name``, ``group``, are required. If ``size`` is provided it must follow
-    lvm's size notation (like 1G, or 20M). Tags are an optional dictionary and is expected to
-    conform to the convention of prefixing them with "ceph." like::
-
-        {"ceph.block_device": "/dev/ceph/osd-1"}
-    """
-    # XXX add CEPH_VOLUME_LVM_DEBUG to enable -vvvv on lv operations
-    type_path_tag = {
-        'journal': 'ceph.journal_device',
-        'data': 'ceph.data_device',
-        'block': 'ceph.block_device',
-        'wal': 'ceph.wal_device',
-        'db': 'ceph.db_device',
-        'lockbox': 'ceph.lockbox_device',  # XXX might not ever need this lockbox sorcery
-    }
-    if size:
-        process.run([
-            'lvcreate',
-            '--yes',
-            '-L',
-            '%s' % size,
-            '-n', name, group
-        ])
-    # create the lv with all the space available, this is needed because the
-    # system call is different for LVM
-    else:
-        process.run([
-            'lvcreate',
-            '--yes',
-            '-l',
-            '100%FREE',
-            '-n', name, group
-        ])
-
-    lv = get_lv(lv_name=name, vg_name=group)
-    lv.set_tags(tags)
-
-    # when creating a distinct type, the caller doesn't know what the path will
-    # be so this function will set it after creation using the mapping
-    path_tag = type_path_tag.get(tags.get('ceph.type'))
-    if path_tag:
-        lv.set_tags(
-            {path_tag: lv.lv_path}
-        )
-    return lv
-
-
-def create_lvs(volume_group, parts=None, size=None, name_prefix='ceph-lv'):
-    """
-    Create multiple Logical Volumes from a Volume Group by calculating the
-    proper extents from ``parts`` or ``size``. A custom prefix can be used
-    (defaults to ``ceph-lv``), these names are always suffixed with a uuid.
-
-    LV creation in ceph-volume will require tags, this is expected to be
-    pre-computed by callers who know Ceph metadata like OSD IDs and FSIDs. It
-    will probably not be the case when mass-creating LVs, so common/default
-    tags will be set to ``"null"``.
-
-    .. note:: LVs that are not in use can be detected by querying LVM for tags that are
-              set to ``"null"``.
-
-    :param volume_group: The volume group (vg) to use for LV creation
-    :type group: ``VolumeGroup()`` object
-    :param parts: Number of LVs to create *instead of* ``size``.
-    :type parts: int
-    :param size: Size (in gigabytes) of LVs to create, e.g. "as many 10gb LVs as possible"
-    :type size: int
-    """
-    if parts is None and size is None:
-        # fallback to just one part (using 100% of the vg)
-        parts = 1
-    lvs = []
-    tags = {
-        "ceph.osd_id": "null",
-        "ceph.type": "null",
-        "ceph.cluster_fsid": "null",
-        "ceph.osd_fsid": "null",
-    }
-    sizing = volume_group.sizing(parts=parts, size=size)
-    for part in range(0, sizing['parts']):
-        size = sizing['sizes']
-        lv_name = '%s-%s' % (name_prefix, uuid.uuid4())
-        lvs.append(
-            create_lv(lv_name, volume_group.name, size="%sg" % size, tags=tags)
-        )
-    return lvs
-
-
-def get_vg(vg_name=None, vg_tags=None):
-    """
-    Return a matching vg for the current system, requires ``vg_name`` or
-    ``tags``. Raises an error if more than one vg is found.
-
-    It is useful to use ``tags`` when trying to find a specific volume group,
-    but it can also lead to multiple vgs being found.
-    """
-    if not any([vg_name, vg_tags]):
-        return None
-    vgs = VolumeGroups()
-    return vgs.get(vg_name=vg_name, vg_tags=vg_tags)
+        disk_sizing['extents'] = int(extents)
+        disk_sizing['percentages'] = extent_sizing['percentages']
+        return disk_sizing
 
 
 class VolumeGroups(list):
@@ -543,8 +658,9 @@ class VolumeGroups(list):
     to filter them via keyword arguments.
     """
 
-    def __init__(self):
-        self._populate()
+    def __init__(self, populate=True):
+        if populate:
+            self._populate()
 
     def _populate(self):
         # get all the vgs in the current system
@@ -596,15 +712,10 @@ class VolumeGroups(list):
         """
         if not any([vg_name, vg_tags]):
             raise TypeError('.filter() requires vg_name or vg_tags (none given)')
-        # first find the filtered volumes with the values in self
-        filtered_groups = self._filter(
-            vg_name=vg_name,
-            vg_tags=vg_tags
-        )
-        # then purge everything
-        self._purge()
-        # and add the filtered items
-        self.extend(filtered_groups)
+
+        filtered_vgs = VolumeGroups(populate=False)
+        filtered_vgs.extend(self._filter(vg_name, vg_tags))
+        return filtered_vgs
 
     def get(self, vg_name=None, vg_tags=None):
         """
@@ -631,6 +742,267 @@ class VolumeGroups(list):
             # the API code consistent
             raise MultipleVGsError(vg_name)
         return vgs[0]
+
+
+def create_vg(devices, name=None, name_prefix=None):
+    """
+    Create a Volume Group. Command looks like::
+
+        vgcreate --force --yes group_name device
+
+    Once created the volume group is returned as a ``VolumeGroup`` object
+
+    :param devices: A list of devices to create a VG. Optionally, a single
+                    device (as a string) can be used.
+    :param name: Optionally set the name of the VG, defaults to 'ceph-{uuid}'
+    :param name_prefix: Optionally prefix the name of the VG, which will get combined
+                        with a UUID string
+    """
+    if isinstance(devices, set):
+        devices = list(devices)
+    if not isinstance(devices, list):
+        devices = [devices]
+    if name_prefix:
+        name = "%s-%s" % (name_prefix, str(uuid.uuid4()))
+    elif name is None:
+        name = "ceph-%s" % str(uuid.uuid4())
+    process.run([
+        'vgcreate',
+        '-s',
+        '1G',
+        '--force',
+        '--yes',
+        name] + devices
+    )
+
+    vg = get_vg(vg_name=name)
+    return vg
+
+
+def extend_vg(vg, devices):
+    """
+    Extend a Volume Group. Command looks like::
+
+        vgextend --force --yes group_name [device, ...]
+
+    Once created the volume group is extended and returned as a ``VolumeGroup`` object
+
+    :param vg: A VolumeGroup object
+    :param devices: A list of devices to extend the VG. Optionally, a single
+                    device (as a string) can be used.
+    """
+    if not isinstance(devices, list):
+        devices = [devices]
+    process.run([
+        'vgextend',
+        '--force',
+        '--yes',
+        vg.name] + devices
+    )
+
+    vg = get_vg(vg_name=vg.name)
+    return vg
+
+
+def reduce_vg(vg, devices):
+    """
+    Reduce a Volume Group. Command looks like::
+
+        vgreduce --force --yes group_name [device, ...]
+
+    :param vg: A VolumeGroup object
+    :param devices: A list of devices to remove from the VG. Optionally, a
+                    single device (as a string) can be used.
+    """
+    if not isinstance(devices, list):
+        devices = [devices]
+    process.run([
+        'vgreduce',
+        '--force',
+        '--yes',
+        vg.name] + devices
+    )
+
+    vg = get_vg(vg_name=vg.name)
+    return vg
+
+
+def remove_vg(vg_name):
+    """
+    Removes a volume group.
+    """
+    if not vg_name:
+        logger.warning('Skipping removal of invalid VG name: "%s"', vg_name)
+        return
+    fail_msg = "Unable to remove vg %s" % vg_name
+    process.run(
+        [
+            'vgremove',
+            '-v',  # verbose
+            '-f',  # force it
+            vg_name
+        ],
+        fail_msg=fail_msg,
+    )
+
+
+def get_vg(vg_name=None, vg_tags=None, vgs=None):
+    """
+    Return a matching vg for the current system, requires ``vg_name`` or
+    ``tags``. Raises an error if more than one vg is found.
+
+    It is useful to use ``tags`` when trying to find a specific volume group,
+    but it can also lead to multiple vgs being found.
+    """
+    if not any([vg_name, vg_tags]):
+        return None
+    if vgs is None or len(vgs) == 0:
+        vgs = VolumeGroups()
+
+    return vgs.get(vg_name=vg_name, vg_tags=vg_tags)
+
+
+def get_device_vgs(device, name_prefix=''):
+    stdout, stderr, returncode = process.call(
+        ['pvs', '--noheadings', '--readonly', '--units=g', '--separator=";"',
+         '-o', VG_FIELDS, device],
+        verbose_on_failure=False
+    )
+    vgs = _output_parser(stdout, VG_FIELDS)
+    return [VolumeGroup(**vg) for vg in vgs]
+
+
+
+#################################
+#
+# Code for LVM Logical Volumes
+#
+###############################
+
+LV_FIELDS = 'lv_tags,lv_path,lv_name,vg_name,lv_uuid,lv_size'
+
+def get_api_lvs():
+    """
+    Return the list of logical volumes available in the system using flags to include common
+    metadata associated with them
+
+    Command and delimited output should look like::
+
+        $ lvs --noheadings --readonly --separator=';' -a -o lv_tags,lv_path,lv_name,vg_name
+          ;/dev/ubuntubox-vg/root;root;ubuntubox-vg
+          ;/dev/ubuntubox-vg/swap_1;swap_1;ubuntubox-vg
+
+    """
+    stdout, stderr, returncode = process.call(
+        ['lvs', '--noheadings', '--readonly', '--separator=";"', '-a', '-o',
+         LV_FIELDS],
+        verbose_on_failure=False
+    )
+    return _output_parser(stdout, LV_FIELDS)
+
+
+class Volume(object):
+    """
+    Represents a Logical Volume from LVM, with some top-level attributes like
+    ``lv_name`` and parsed tags as a dictionary of key/value pairs.
+    """
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+        self.lv_api = kw
+        self.name = kw['lv_name']
+        self.tags = parse_tags(kw['lv_tags'])
+        self.encrypted = self.tags.get('ceph.encrypted', '0') == '1'
+        self.used_by_ceph = 'ceph.osd_id' in self.tags
+
+    def __str__(self):
+        return '<%s>' % self.lv_api['lv_path']
+
+    def __repr__(self):
+        return self.__str__()
+
+    def as_dict(self):
+        obj = {}
+        obj.update(self.lv_api)
+        obj['tags'] = self.tags
+        obj['name'] = self.name
+        obj['type'] = self.tags['ceph.type']
+        obj['path'] = self.lv_path
+        return obj
+
+    def report(self):
+        if not self.used_by_ceph:
+            return {
+                'name': self.lv_name,
+                'comment': 'not used by ceph'
+            }
+        else:
+            type_ = self.tags['ceph.type']
+            report = {
+                'name': self.lv_name,
+                'osd_id': self.tags['ceph.osd_id'],
+                'cluster_name': self.tags['ceph.cluster_name'],
+                'type': type_,
+                'osd_fsid': self.tags['ceph.osd_fsid'],
+                'cluster_fsid': self.tags['ceph.cluster_fsid'],
+            }
+            type_uuid = '{}_uuid'.format(type_)
+            report[type_uuid] = self.tags['ceph.{}'.format(type_uuid)]
+            return report
+
+    def clear_tags(self):
+        """
+        Removes all tags from the Logical Volume.
+        """
+        for k in list(self.tags):
+            self.clear_tag(k)
+
+
+    def set_tags(self, tags):
+        """
+        :param tags: A dictionary of tag names and values, like::
+
+            {
+                "ceph.osd_fsid": "aaa-fff-bbbb",
+                "ceph.osd_id": "0"
+            }
+
+        At the end of all modifications, the tags are refreshed to reflect
+        LVM's most current view.
+        """
+        for k, v in tags.items():
+            self.set_tag(k, v)
+
+
+    def clear_tag(self, key):
+        if self.tags.get(key):
+            current_value = self.tags[key]
+            tag = "%s=%s" % (key, current_value)
+            process.call(['lvchange', '--deltag', tag, self.lv_path])
+            del self.tags[key]
+
+
+    def set_tag(self, key, value):
+        """
+        Set the key/value pair as an LVM tag.
+        """
+        # remove it first if it exists
+        self.clear_tag(key)
+
+        process.call(
+            [
+                'lvchange',
+                '--addtag', '%s=%s' % (key, value), self.lv_path
+            ]
+        )
+        self.tags[key] = value
+
+    def deactivate(self):
+        """
+        Deactivate the LV by calling lvchange -an
+        """
+        process.call(['lvchange', '-an', self.lv_path])
 
 
 class Volumes(list):
@@ -740,355 +1112,270 @@ class Volumes(list):
         return lvs[0]
 
 
-class PVolumes(list):
+def create_lv(name_prefix, uuid, vg=None, device=None, extents=None, size=None, tags=None):
     """
-    A list of all known (physical) volumes for the current system, with the ability
-    to filter them via keyword arguments.
+    Create a Logical Volume in a Volume Group. Command looks like::
+
+        lvcreate -L 50G -n gfslv vg0
+
+    ``name_prefix`` is required. If ``size`` is provided it must follow
+    lvm's size notation (like 1G, or 20M). Tags are an optional dictionary and is expected to
+    conform to the convention of prefixing them with "ceph." like::
+
+        {"ceph.block_device": "/dev/ceph/osd-1"}
+
+    :param name_prefix: name prefix for the LV, typically somehting like ceph-osd-block
+    :param uuid: UUID to ensure uniqueness; is combined with name_prefix to
+                 form the LV name
+    :param vg: optional, pass an existing VG to create LV
+    :param device: optional, device to use. Either device of vg must be passed
+    :param extends: optional, how many lvm extends to use
+    :param size: optional, LV size, must follow lvm's size notation, supersedes
+    extends
+    :param tags: optional, a dict of lvm tags to set on the LV
     """
+    name = '{}-{}'.format(name_prefix, uuid)
+    if not vg:
+        if not device:
+            raise RuntimeError("Must either specify vg or device, none given")
+        # check if a vgs starting with ceph already exists
+        vgs = get_device_vgs(device, 'ceph')
+        if vgs:
+            vg = vgs[0].vg_name
+        else:
+            # create on if not
+            vg = create_vg(device, name_prefix='ceph').vg_name
+    assert(vg)
 
-    def __init__(self):
-        self._populate()
+    if size:
+        command = [
+            'lvcreate',
+            '--yes',
+            '-L',
+            '{}'.format(size),
+            '-n', name, vg
+        ]
+    elif extents:
+        command = [
+            'lvcreate',
+            '--yes',
+            '-l',
+            '{}'.format(extents),
+            '-n', name, vg
+        ]
+    # create the lv with all the space available, this is needed because the
+    # system call is different for LVM
+    else:
+        command = [
+            'lvcreate',
+            '--yes',
+            '-l',
+            '100%FREE',
+            '-n', name, vg
+        ]
+    process.run(command)
 
-    def _populate(self):
-        # get all the pvs in the current system
-        for pv_item in get_api_pvs():
-            self.append(PVolume(**pv_item))
+    lv = get_lv(lv_name=name, vg_name=vg)
 
-    def _purge(self):
-        """
-        Deplete all the items in the list, used internally only so that we can
-        dynamically allocate the items when filtering without the concern of
-        messing up the contents
-        """
-        self[:] = []
-
-    def _filter(self, pv_name=None, pv_uuid=None, pv_tags=None):
-        """
-        The actual method that filters using a new list. Useful so that other
-        methods that do not want to alter the contents of the list (e.g.
-        ``self.find``) can operate safely.
-        """
-        filtered = [i for i in self]
-        if pv_name:
-            filtered = [i for i in filtered if i.pv_name == pv_name]
-
-        if pv_uuid:
-            filtered = [i for i in filtered if i.pv_uuid == pv_uuid]
-
-        # at this point, `filtered` has either all the physical volumes in self
-        # or is an actual filtered list if any filters were applied
-        if pv_tags:
-            tag_filtered = []
-            for pvolume in filtered:
-                matches = all(pvolume.tags.get(k) == str(v) for k, v in pv_tags.items())
-                if matches:
-                    tag_filtered.append(pvolume)
-            # return the tag_filtered pvolumes here, the `filtered` list is no
-            # longer useable
-            return tag_filtered
-
-        return filtered
-
-    def filter(self, pv_name=None, pv_uuid=None, pv_tags=None):
-        """
-        Filter out volumes on top level attributes like ``pv_name`` or by
-        ``pv_tags`` where a dict is required. For example, to find a physical volume
-        that has an OSD ID of 0, the filter would look like::
-
-            pv_tags={'ceph.osd_id': '0'}
-
-        """
-        if not any([pv_name, pv_uuid, pv_tags]):
-            raise TypeError('.filter() requires pv_name, pv_uuid, or pv_tags (none given)')
-        # first find the filtered volumes with the values in self
-        filtered_volumes = self._filter(
-            pv_name=pv_name,
-            pv_uuid=pv_uuid,
-            pv_tags=pv_tags
-        )
-        # then purge everything
-        self._purge()
-        # and add the filtered items
-        self.extend(filtered_volumes)
-
-    def get(self, pv_name=None, pv_uuid=None, pv_tags=None):
-        """
-        This is a bit expensive, since it will try to filter out all the
-        matching items in the list, filter them out applying anything that was
-        added and return the matching item.
-
-        This method does *not* alter the list, and it will raise an error if
-        multiple pvs are matched
-
-        It is useful to use ``tags`` when trying to find a specific logical volume,
-        but it can also lead to multiple pvs being found, since a lot of metadata
-        is shared between pvs of a distinct OSD.
-        """
-        if not any([pv_name, pv_uuid, pv_tags]):
-            return None
-        pvs = self._filter(
-            pv_name=pv_name,
-            pv_uuid=pv_uuid,
-            pv_tags=pv_tags
-        )
-        if not pvs:
-            return None
-        if len(pvs) > 1:
-            raise MultiplePVsError(pv_name)
-        return pvs[0]
-
-
-class VolumeGroup(object):
-    """
-    Represents an LVM group, with some top-level attributes like ``vg_name``
-    """
-
-    def __init__(self, **kw):
-        for k, v in kw.items():
-            setattr(self, k, v)
-        self.name = kw['vg_name']
-        self.tags = parse_tags(kw.get('vg_tags', ''))
-
-    def __str__(self):
-        return '<%s>' % self.name
-
-    def __repr__(self):
-        return self.__str__()
-
-    def _parse_size(self, size):
-        error_msg = "Unable to convert vg size to integer: '%s'" % str(size)
-        try:
-            integer, _ = size.split('g')
-        except ValueError:
-            logger.exception(error_msg)
-            raise RuntimeError(error_msg)
-
-        try:
-            integer = float(integer)
-        except (TypeError, ValueError):
-            logger.exception(error_msg)
-            raise RuntimeError(error_msg)
-
-        # round down the float, convert to an integer
-        return int(floor(integer))
-
-    @property
-    def free(self):
-        """
-        Parse the available size in gigabytes from the ``vg_free`` attribute, that
-        will be a string with a character ('g') to indicate gigabytes in size.
-        Returns a rounded down integer to ease internal operations::
-
-        >>> data_vg.vg_free
-        '0.01g'
-        >>> data_vg.size
-        0
-        """
-        return self._parse_size(self.vg_free)
-
-    @property
-    def size(self):
-        """
-        Parse the size in gigabytes from the ``vg_size`` attribute, that
-        will be a string with a character ('g') to indicate gigabytes in size.
-        Returns a rounded down integer to ease internal operations::
-
-        >>> data_vg.vg_size
-        '1024.9g'
-        >>> data_vg.size
-        1024
-        """
-        return self._parse_size(self.vg_size)
-
-    def sizing(self, parts=None, size=None):
-        """
-        Calculate proper sizing to fully utilize the volume group in the most
-        efficient way possible. To prevent situations where LVM might accept
-        a percentage that is beyond the vg's capabilities, it will refuse with
-        an error when requesting a larger-than-possible parameter, in addition
-        to rounding down calculations.
-
-        A dictionary with different sizing parameters is returned, to make it
-        easier for others to choose what they need in order to create logical
-        volumes::
-
-        >>> data_vg.free
-        1024
-        >>> data_vg.sizing(parts=4)
-        {'parts': 4, 'sizes': 256, 'percentages': 25}
-        >>> data_vg.sizing(size=512)
-        {'parts': 2, 'sizes': 512, 'percentages': 50}
-
-
-        :param parts: Number of parts to create LVs from
-        :param size: Size in gigabytes to divide the VG into
-
-        :raises SizeAllocationError: When requested size cannot be allocated with
-        :raises ValueError: If both ``parts`` and ``size`` are given
-        """
-        if parts is not None and size is not None:
-            raise ValueError(
-                "Cannot process sizing with both parts (%s) and size (%s)" % (parts, size)
-            )
-
-        if size and size > self.free:
-            raise SizeAllocationError(size, self.free)
-
-        def get_percentage(parts):
-            return int(floor(100 / float(parts)))
-
-        if parts is not None:
-            # Prevent parts being 0, falling back to 1 (100% usage)
-            parts = parts or 1
-            percentages = get_percentage(parts)
-
-        if size:
-            parts = int(floor(self.free / size)) or 1
-            percentages = get_percentage(parts)
-
-        sizes = int(floor(self.free / parts)) if parts else int(floor(self.free))
-
-        return {
-            'parts': parts,
-            'percentages': percentages,
-            'sizes': sizes
+    if tags is None:
+        tags = {
+            "ceph.osd_id": "null",
+            "ceph.type": "null",
+            "ceph.cluster_fsid": "null",
+            "ceph.osd_fsid": "null",
         }
+    # when creating a distinct type, the caller doesn't know what the path will
+    # be so this function will set it after creation using the mapping
+    # XXX add CEPH_VOLUME_LVM_DEBUG to enable -vvvv on lv operations
+    type_path_tag = {
+        'journal': 'ceph.journal_device',
+        'data': 'ceph.data_device',
+        'block': 'ceph.block_device',
+        'wal': 'ceph.wal_device',
+        'db': 'ceph.db_device',
+        'lockbox': 'ceph.lockbox_device',  # XXX might not ever need this lockbox sorcery
+    }
+    path_tag = type_path_tag.get(tags.get('ceph.type'))
+    if path_tag:
+        tags.update({path_tag: lv.lv_path})
+
+    lv.set_tags(tags)
+
+    return lv
 
 
-class Volume(object):
+def remove_lv(lv):
     """
-    Represents a Logical Volume from LVM, with some top-level attributes like
-    ``lv_name`` and parsed tags as a dictionary of key/value pairs.
+    Removes a logical volume given it's absolute path.
+
+    Will return True if the lv is successfully removed or
+    raises a RuntimeError if the removal fails.
+
+    :param lv: A ``Volume`` object or the path for an LV
     """
+    if isinstance(lv, Volume):
+        path = lv.lv_path
+    else:
+        path = lv
 
-    def __init__(self, **kw):
-        for k, v in kw.items():
-            setattr(self, k, v)
-        self.lv_api = kw
-        self.name = kw['lv_name']
-        self.tags = parse_tags(kw['lv_tags'])
-        self.encrypted = self.tags.get('ceph.encrypted', '0') == '1'
+    stdout, stderr, returncode = process.call(
+        [
+            'lvremove',
+            '-v',  # verbose
+            '-f',  # force it
+            path
+        ],
+        show_command=True,
+        terminal_verbose=True,
+    )
+    if returncode != 0:
+        raise RuntimeError("Unable to remove %s" % path)
+    return True
 
-    def __str__(self):
-        return '<%s>' % self.lv_api['lv_path']
 
-    def __repr__(self):
-        return self.__str__()
+def is_lv(dev, lvs=None):
+    """
+    Boolean to detect if a device is an LV or not.
+    """
+    splitname = dmsetup_splitname(dev)
+    # Allowing to optionally pass `lvs` can help reduce repetitive checks for
+    # multiple devices at once.
+    if lvs is None or len(lvs) == 0:
+        lvs = Volumes()
 
-    def as_dict(self):
-        obj = {}
-        obj.update(self.lv_api)
-        obj['tags'] = self.tags
-        obj['name'] = self.name
-        obj['type'] = self.tags['ceph.type']
-        obj['path'] = self.lv_path
-        return obj
+    if splitname.get('LV_NAME'):
+        lvs.filter(lv_name=splitname['LV_NAME'], vg_name=splitname['VG_NAME'])
+        return len(lvs) > 0
+    return False
 
-    def clear_tags(self):
-        """
-        Removes all tags from the Logical Volume.
-        """
-        for k, v in self.tags.items():
-            tag = "%s=%s" % (k, v)
-            process.run(['lvchange', '--deltag', tag, self.lv_path])
+def get_lv_by_name(name):
+    stdout, stderr, returncode = process.call(
+        ['lvs', '--noheadings', '-o', LV_FIELDS, '-S',
+         'lv_name={}'.format(name)],
+        verbose_on_failure=False
+    )
+    lvs = _output_parser(stdout, LV_FIELDS)
+    return [Volume(**lv) for lv in lvs]
 
-    def set_tags(self, tags):
-        """
-        :param tags: A dictionary of tag names and values, like::
+def get_lvs_by_tag(lv_tag):
+    stdout, stderr, returncode = process.call(
+        ['lvs', '--noheadings', '--separator=";"', '-a', '-o', LV_FIELDS, '-S',
+         'lv_tags={{{}}}'.format(lv_tag)],
+        verbose_on_failure=False
+    )
+    lvs = _output_parser(stdout, LV_FIELDS)
+    return [Volume(**lv) for lv in lvs]
 
-            {
-                "ceph.osd_fsid": "aaa-fff-bbbb",
-                "ceph.osd_id": "0"
-            }
+def get_lv(lv_name=None, vg_name=None, lv_path=None, lv_uuid=None, lv_tags=None, lvs=None):
+    """
+    Return a matching lv for the current system, requiring ``lv_name``,
+    ``vg_name``, ``lv_path`` or ``tags``. Raises an error if more than one lv
+    is found.
 
-        At the end of all modifications, the tags are refreshed to reflect
-        LVM's most current view.
-        """
-        for k, v in tags.items():
-            self.set_tag(k, v)
-        # after setting all the tags, refresh them for the current object, use the
-        # lv_* identifiers to filter because those shouldn't change
-        lv_object = get_lv(lv_name=self.lv_name, lv_path=self.lv_path)
-        self.tags = lv_object.tags
+    It is useful to use ``tags`` when trying to find a specific logical volume,
+    but it can also lead to multiple lvs being found, since a lot of metadata
+    is shared between lvs of a distinct OSD.
+    """
+    if not any([lv_name, vg_name, lv_path, lv_uuid, lv_tags]):
+        return None
+    if lvs is None:
+        lvs = Volumes()
+    return lvs.get(
+        lv_name=lv_name, vg_name=vg_name, lv_path=lv_path, lv_uuid=lv_uuid,
+        lv_tags=lv_tags
+    )
 
-    def set_tag(self, key, value):
-        """
-        Set the key/value pair as an LVM tag. Does not "refresh" the values of
-        the current object for its tags. Meant to be a "fire and forget" type
-        of modification.
-        """
-        # remove it first if it exists
-        if self.tags.get(key):
-            current_value = self.tags[key]
-            tag = "%s=%s" % (key, current_value)
-            process.call(['lvchange', '--deltag', tag, self.lv_api['lv_path']])
 
-        process.call(
-            [
-                'lvchange',
-                '--addtag', '%s=%s' % (key, value), self.lv_path
-            ]
+def get_lv_from_argument(argument):
+    """
+    Helper proxy function that consumes a possible logical volume passed in from the CLI
+    in the form of `vg/lv`, but with some validation so that an argument that is a full
+    path to a device can be ignored
+    """
+    if argument.startswith('/'):
+        lv = get_lv(lv_path=argument)
+        return lv
+    try:
+        vg_name, lv_name = argument.split('/')
+    except (ValueError, AttributeError):
+        return None
+    return get_lv(lv_name=lv_name, vg_name=vg_name)
+
+
+def create_lvs(volume_group, parts=None, size=None, name_prefix='ceph-lv'):
+    """
+    Create multiple Logical Volumes from a Volume Group by calculating the
+    proper extents from ``parts`` or ``size``. A custom prefix can be used
+    (defaults to ``ceph-lv``), these names are always suffixed with a uuid.
+
+    LV creation in ceph-volume will require tags, this is expected to be
+    pre-computed by callers who know Ceph metadata like OSD IDs and FSIDs. It
+    will probably not be the case when mass-creating LVs, so common/default
+    tags will be set to ``"null"``.
+
+    .. note:: LVs that are not in use can be detected by querying LVM for tags that are
+              set to ``"null"``.
+
+    :param volume_group: The volume group (vg) to use for LV creation
+    :type group: ``VolumeGroup()`` object
+    :param parts: Number of LVs to create *instead of* ``size``.
+    :type parts: int
+    :param size: Size (in gigabytes) of LVs to create, e.g. "as many 10gb LVs as possible"
+    :type size: int
+    :param extents: The number of LVM extents to use to create the LV. Useful if looking to have
+    accurate LV sizes (LVM rounds sizes otherwise)
+    """
+    if parts is None and size is None:
+        # fallback to just one part (using 100% of the vg)
+        parts = 1
+    lvs = []
+    tags = {
+        "ceph.osd_id": "null",
+        "ceph.type": "null",
+        "ceph.cluster_fsid": "null",
+        "ceph.osd_fsid": "null",
+    }
+    sizing = volume_group.sizing(parts=parts, size=size)
+    for part in range(0, sizing['parts']):
+        size = sizing['sizes']
+        extents = sizing['extents']
+        lvs.append(
+            create_lv(name_prefix, uuid.uuid4(), vg=volume_group.name, extents=extents, tags=tags)
         )
+    return lvs
 
 
-class PVolume(object):
-    """
-    Represents a Physical Volume from LVM, with some top-level attributes like
-    ``pv_name`` and parsed tags as a dictionary of key/value pairs.
-    """
+#############################################################
+#
+# New methods to get PVs, LVs, and VGs.
+# Later, these can be easily merged with get_api_* methods
+#
+###########################################################
 
-    def __init__(self, **kw):
-        for k, v in kw.items():
-            setattr(self, k, v)
-        self.pv_api = kw
-        self.name = kw['pv_name']
-        self.tags = parse_tags(kw['pv_tags'])
+PV_FIELDS = 'pv_name,pv_tags,pv_uuid,vg_name,lv_uuid'
+VG_FIELDS = 'vg_name,pv_count,lv_count,snap_count,vg_attr,vg_size,vg_free,vg_free_count'
+LV_FIELDS = 'lv_tags,lv_path,lv_name,vg_name,lv_uuid,lv_size'
 
-    def __str__(self):
-        return '<%s>' % self.pv_api['pv_name']
+def get_pvs(fields=PV_FIELDS, sep='";"', filters=''):
+    args = ['pvs', '--no-heading', '--readonly', '--separator=' + sep, '-S',
+            filters, '-o', fields]
 
-    def __repr__(self):
-        return self.__str__()
+    stdout, stderr, returncode = process.call(args, verbose_on_failure=False)
+    pvs_report = _output_parser(stdout, fields)
+    return [PVolume(**pv_report) for pv_report in pvs_report]
 
-    def set_tags(self, tags):
-        """
-        :param tags: A dictionary of tag names and values, like::
+def get_vgs(fields=VG_FIELDS, sep='";"', filters=''):
+    args = ['vgs', '--no-heading', '--readonly', '--separator=' + sep, '-S',
+            filters, '-o', fields]
 
-            {
-                "ceph.osd_fsid": "aaa-fff-bbbb",
-                "ceph.osd_id": "0"
-            }
+    stdout, stderr, returncode = process.call(args, verbose_on_failure=False)
+    vgs_report =_output_parser(stdout, fields)
+    return [VolumeGroup(**vg_report) for vg_report in vgs_report]
 
-        At the end of all modifications, the tags are refreshed to reflect
-        LVM's most current view.
-        """
-        for k, v in tags.items():
-            self.set_tag(k, v)
-        # after setting all the tags, refresh them for the current object, use the
-        # pv_* identifiers to filter because those shouldn't change
-        pv_object = get_pv(pv_name=self.pv_name, pv_uuid=self.pv_uuid)
-        self.tags = pv_object.tags
+def get_lvs(fields=LV_FIELDS, sep='";"', filters=''):
+    args = ['lvs', '--no-heading', '--readonly', '--separator=' + sep, '-S',
+            filters, '-o', fields]
 
-    def set_tag(self, key, value):
-        """
-        Set the key/value pair as an LVM tag. Does not "refresh" the values of
-        the current object for its tags. Meant to be a "fire and forget" type
-        of modification.
-
-        **warning**: Altering tags on a PV has to be done ensuring that the
-        device is actually the one intended. ``pv_name`` is *not* a persistent
-        value, only ``pv_uuid`` is. Using ``pv_uuid`` is the best way to make
-        sure the device getting changed is the one needed.
-        """
-        # remove it first if it exists
-        if self.tags.get(key):
-            current_value = self.tags[key]
-            tag = "%s=%s" % (key, current_value)
-            process.call(['pvchange', '--deltag', tag, self.pv_name])
-
-        process.call(
-            [
-                'pvchange',
-                '--addtag', '%s=%s' % (key, value), self.pv_name
-            ]
-        )
+    stdout, stderr, returncode = process.call(args, verbose_on_failure=False)
+    lvs_report = _output_parser(stdout, fields)
+    return [Volume(**lv_report) for lv_report in lvs_report]

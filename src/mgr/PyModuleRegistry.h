@@ -19,12 +19,15 @@
 
 #include <string>
 #include <map>
+#include <set>
 #include <memory>
 
 #include "common/LogClient.h"
 
 #include "ActivePyModules.h"
 #include "StandbyPyModules.h"
+
+class MgrSession;
 
 /**
  * This class is responsible for setting up the python runtime environment
@@ -37,10 +40,11 @@
 class PyModuleRegistry
 {
 private:
-  mutable Mutex lock{"PyModuleRegistry::lock"};
+  mutable ceph::mutex lock = ceph::make_mutex("PyModuleRegistry::lock");
   LogChannelRef clog;
 
   std::map<std::string, PyModuleRef> modules;
+  std::multimap<std::string, entity_addrvec_t> clients;
 
   std::unique_ptr<ActivePyModules> active_modules;
   std::unique_ptr<StandbyPyModules> standby_modules;
@@ -54,21 +58,22 @@ private:
   /**
    * Discover python modules from local disk
    */
-  std::set<std::string> probe_modules() const;
+  std::set<std::string> probe_modules(const std::string &path) const;
 
   PyModuleConfig module_config;
 
 public:
   void handle_config(const std::string &k, const std::string &v);
+  void handle_config_notify();
 
   /**
    * Get references to all modules (whether they have loaded and/or
    * errored) or not.
    */
-  std::list<PyModuleRef> get_modules() const
+  auto get_modules() const
   {
-    Mutex::Locker l(lock);
-    std::list<PyModuleRef> modules_out;
+    std::vector<PyModuleRef> modules_out;
+    std::lock_guard l(lock);
     for (const auto &i : modules) {
       modules_out.push_back(i.second);
     }
@@ -94,9 +99,10 @@ public:
   void active_start(
                 DaemonStateIndex &ds, ClusterState &cs,
                 const std::map<std::string, std::string> &kv_store,
-                MonClient &mc, LogChannelRef clog_, Objecter &objecter_,
-                Client &client_, Finisher &f);
-  void standby_start(MonClient &mc);
+                MonClient &mc, LogChannelRef clog_, LogChannelRef audit_clog_,
+                Objecter &objecter_, Client &client_, Finisher &f,
+                DaemonServer &server);
+  void standby_start(MonClient &mc, Finisher &f);
 
   bool is_standby_running() const
   {
@@ -106,26 +112,23 @@ public:
   void active_shutdown();
   void shutdown();
 
-  template<typename Callback, typename...Args>
-  void with_active_modules(Callback&& cb, Args&&...args) const
-  {
-    Mutex::Locker l(lock);
-    assert(active_modules != nullptr);
-
-    std::forward<Callback>(cb)(*active_modules, std::forward<Args>(args)...);
-  }
-
   std::vector<MonCommand> get_commands() const;
   std::vector<ModuleCommand> get_py_commands() const;
 
   /**
-   * module_name **must** exist, but does not have to be loaded
-   * or runnable.
+   * Get the specified module. The module does not have to be
+   * loaded or runnable.
+   *
+   * Returns an empty reference if it does not exist.
    */
   PyModuleRef get_module(const std::string &module_name)
   {
-    Mutex::Locker l(lock);
-    return modules.at(module_name);
+    std::lock_guard l(lock);
+    auto module_iter = modules.find(module_name);
+    if (module_iter == modules.end()) {
+        return {};
+    }
+    return module_iter->second;
   }
 
   /**
@@ -138,7 +141,8 @@ public:
    * return EAGAIN.
    */
   int handle_command(
-    std::string const &module_name,
+    const ModuleCommand& module_command,
+    const MgrSession& session,
     const cmdmap_t &cmdmap,
     const bufferlist &inbuf,
     std::stringstream *ds,
@@ -149,6 +153,12 @@ public:
    * modules that have failed (i.e. unhandled exceptions in serve())
    */
   void get_health_checks(health_check_map_t *checks);
+
+  void get_progress_events(map<std::string,ProgressEvent> *events) {
+    if (active_modules) {
+      active_modules->get_progress_events(events);
+    }
+  }
 
   // FIXME: breaking interface so that I don't have to go rewrite all
   // the places that call into these (for now)
@@ -170,8 +180,33 @@ public:
 
   std::map<std::string, std::string> get_services() const
   {
-    assert(active_modules);
+    ceph_assert(active_modules);
     return active_modules->get_services();
   }
+
+  void register_client(std::string_view name, entity_addrvec_t addrs)
+  {
+    clients.emplace(std::string(name), std::move(addrs));
+  }
+  void unregister_client(std::string_view name, const entity_addrvec_t& addrs)
+  {
+    auto itp = clients.equal_range(std::string(name));
+    for (auto it = itp.first; it != itp.second; ++it) {
+      if (it->second == addrs) {
+        it = clients.erase(it);
+      }
+    }
+  }
+
+  auto get_clients() const
+  {
+    std::scoped_lock l(lock);
+    std::vector<entity_addrvec_t> v;
+    for (const auto& p : clients) {
+      v.push_back(p.second);
+    }
+    return v;
+  }
+
   // <<< (end of ActivePyModules cheeky call-throughs)
 };

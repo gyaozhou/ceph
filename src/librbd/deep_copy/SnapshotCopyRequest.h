@@ -97,9 +97,9 @@ private:
   std::string m_snap_name;
   cls::rbd::SnapshotNamespace m_snap_namespace;
 
-  librbd::ParentSpec m_dst_parent_spec;
+  cls::rbd::ParentImageSpec m_dst_parent_spec;
 
-  Mutex m_lock;
+  ceph::mutex m_lock;
   bool m_canceled = false;
 
   void send_snap_unprotect();
@@ -124,10 +124,10 @@ private:
 
   void error(int r);
 
-  int validate_parent(ImageCtxT *image_ctx, librbd::ParentSpec *spec);
+  int validate_parent(ImageCtxT *image_ctx, cls::rbd::ParentImageSpec *spec);
 
-  Context *start_lock_op();
-  Context *start_lock_op(RWLock &owner_lock);
+  Context *start_lock_op(int* r);
+  Context *start_lock_op(ceph::shared_mutex &owner_locki, int* r);
 
   void finish(int r);
 };

@@ -1,51 +1,50 @@
-import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { Component, Input } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { RouterTestingModule } from '@angular/router/testing';
 
-import { ChartsModule } from 'ng2-charts/ng2-charts';
-import { BsDropdownModule, ProgressbarModule, TabsModule } from 'ngx-bootstrap';
-
-import { CephfsService } from '../../../shared/api/cephfs.service';
+import { configureTestBed, i18nProviders } from '../../../../testing/unit-test-helper';
 import { SharedModule } from '../../../shared/shared.module';
-import { configureTestBed } from '../../../shared/unit-test-helper';
 import { CephfsDetailComponent } from './cephfs-detail.component';
 
 @Component({ selector: 'cd-cephfs-chart', template: '' })
 class CephfsChartStubComponent {
-  @Input() mdsCounter: any;
-}
-
-@Component({ selector: 'cd-cephfs-clients', template: '' })
-class CephfsClientsStubComponent {
-  @Input() mdsCounter: any;
+  @Input()
+  mdsCounter: any;
 }
 
 describe('CephfsDetailComponent', () => {
   let component: CephfsDetailComponent;
   let fixture: ComponentFixture<CephfsDetailComponent>;
 
+  const updateDetails = (standbys, pools, ranks, mdsCounters, name) => {
+    component.data = {
+      standbys,
+      pools,
+      ranks,
+      mdsCounters,
+      name
+    };
+    fixture.detectChanges();
+  };
+
   configureTestBed({
-    imports: [
-      SharedModule,
-      ChartsModule,
-      RouterTestingModule,
-      BsDropdownModule.forRoot(),
-      ProgressbarModule.forRoot(),
-      TabsModule.forRoot(),
-      HttpClientTestingModule
-    ],
-    declarations: [CephfsDetailComponent, CephfsChartStubComponent, CephfsClientsStubComponent],
-    providers: [CephfsService]
+    imports: [SharedModule],
+    declarations: [CephfsDetailComponent, CephfsChartStubComponent],
+    providers: i18nProviders
   });
 
   beforeEach(() => {
     fixture = TestBed.createComponent(CephfsDetailComponent);
     component = fixture.componentInstance;
+    updateDetails('b', [], [], { a: { name: 'a', x: [0], y: [0, 1] } }, 'someFs');
     fixture.detectChanges();
+    component.ngOnChanges();
   });
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  it('prepares standby on change', () => {
+    expect(component.standbys).toEqual([{ key: 'Standby daemons', value: 'b' }]);
   });
 });

@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#! /usr/bin/env python3
 
 import requests
 import time
@@ -72,8 +72,9 @@ screenplay = [
     ('get',    '/request?page=0', {}),
     ('delete', '/request', {}),
     ('get',    '/request', {}),
-    ('patch', '/pool/1', {'pg_num': 128}),
-    ('patch', '/pool/1', {'pgp_num': 128}),
+    ('patch',  '/pool/1', {'pg_num': 128}),
+    ('patch',  '/pool/1', {'pgp_num': 128}),
+    ('get',    '/perf?daemon=.*', {}),
 ]
 
 for method, endpoint, args in screenplay:

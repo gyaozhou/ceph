@@ -1,7 +1,7 @@
 import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 
-import { configureTestBed } from '../unit-test-helper';
+import { configureTestBed, i18nProviders } from '../../../testing/unit-test-helper';
 import { OsdService } from './osd.service';
 
 describe('OsdService', () => {
@@ -9,7 +9,7 @@ describe('OsdService', () => {
   let httpTesting: HttpTestingController;
 
   configureTestBed({
-    providers: [OsdService],
+    providers: [OsdService, i18nProviders],
     imports: [HttpClientTestingModule]
   });
 
@@ -48,5 +48,80 @@ describe('OsdService', () => {
     service.scrub('foo', false).subscribe();
     const req = httpTesting.expectOne('api/osd/foo/scrub?deep=false');
     expect(req.request.method).toBe('POST');
+  });
+
+  it('should call getFlags', () => {
+    service.getFlags().subscribe();
+    const req = httpTesting.expectOne('api/osd/flags');
+    expect(req.request.method).toBe('GET');
+  });
+
+  it('should call updateFlags', () => {
+    service.updateFlags(['foo']).subscribe();
+    const req = httpTesting.expectOne('api/osd/flags');
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual({ flags: ['foo'] });
+  });
+
+  it('should mark the OSD out', () => {
+    service.markOut(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/mark_out');
+    expect(req.request.method).toBe('POST');
+  });
+
+  it('should mark the OSD in', () => {
+    service.markIn(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/mark_in');
+    expect(req.request.method).toBe('POST');
+  });
+
+  it('should mark the OSD down', () => {
+    service.markDown(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/mark_down');
+    expect(req.request.method).toBe('POST');
+  });
+
+  it('should reweight an OSD', () => {
+    service.reweight(1, 0.5).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/reweight');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ weight: 0.5 });
+  });
+
+  it('should update OSD', () => {
+    service.update(1, 'hdd').subscribe();
+    const req = httpTesting.expectOne('api/osd/1');
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual({ device_class: 'hdd' });
+  });
+
+  it('should mark an OSD lost', () => {
+    service.markLost(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/mark_lost');
+    expect(req.request.method).toBe('POST');
+  });
+
+  it('should purge an OSD', () => {
+    service.purge(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/purge');
+    expect(req.request.method).toBe('POST');
+  });
+
+  it('should destroy an OSD', () => {
+    service.destroy(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/destroy');
+    expect(req.request.method).toBe('POST');
+  });
+
+  it('should return if it is safe to destroy an OSD', () => {
+    service.safeToDestroy('[0,1]').subscribe();
+    const req = httpTesting.expectOne('api/osd/safe_to_destroy?ids=[0,1]');
+    expect(req.request.method).toBe('GET');
+  });
+
+  it('should call the devices endpoint to retrieve smart data', () => {
+    service.getDevices(1).subscribe();
+    const req = httpTesting.expectOne('api/osd/1/devices');
+    expect(req.request.method).toBe('GET');
   });
 });

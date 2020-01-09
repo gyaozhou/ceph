@@ -17,30 +17,36 @@
 
 #include "msg/Message.h"
 
-class MExportDirNotify : public Message {
+class MExportDirNotify : public SafeMessage {
+private:
+  static const int HEAD_VERSION = 1;
+  static const int COMPAT_VERSION = 1;
+
   dirfrag_t base;
   bool ack;
   pair<__s32,__s32> old_auth, new_auth;
   list<dirfrag_t> bounds;  // bounds; these dirs are _not_ included (tho the dirfragdes are)
 
  public:
-  dirfrag_t get_dirfrag() { return base; }
-  pair<__s32,__s32> get_old_auth() { return old_auth; }
-  pair<__s32,__s32> get_new_auth() { return new_auth; }
-  bool wants_ack() { return ack; }
+  dirfrag_t get_dirfrag() const { return base; }
+  pair<__s32,__s32> get_old_auth() const { return old_auth; }
+  pair<__s32,__s32> get_new_auth() const { return new_auth; }
+  bool wants_ack() const { return ack; }
+  const list<dirfrag_t>& get_bounds() const { return bounds; }
   list<dirfrag_t>& get_bounds() { return bounds; }
 
-  MExportDirNotify() {}
+protected:
+  MExportDirNotify() :
+    SafeMessage{MSG_MDS_EXPORTDIRNOTIFY, HEAD_VERSION, COMPAT_VERSION} {}
   MExportDirNotify(dirfrag_t i, uint64_t tid, bool a, pair<__s32,__s32> oa, pair<__s32,__s32> na) :
-    Message(MSG_MDS_EXPORTDIRNOTIFY),
+    SafeMessage{MSG_MDS_EXPORTDIRNOTIFY, HEAD_VERSION, COMPAT_VERSION},
     base(i), ack(a), old_auth(oa), new_auth(na) {
     set_tid(tid);
   }
-private:
   ~MExportDirNotify() override {}
 
 public:
-  const char *get_type_name() const override { return "ExNot"; }
+  std::string_view get_type_name() const override { return "ExNot"; }
   void print(ostream& o) const override {
     o << "export_notify(" << base;
     o << " " << old_auth << " -> " << new_auth;
@@ -75,6 +81,9 @@ public:
     decode(new_auth, p);
     decode(bounds, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif

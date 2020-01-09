@@ -11,17 +11,16 @@
  * Foundation.  See file COPYING.
  */
 
+#include "include/compat.h"
 #include "key_value_store/key_value_structure.h"
 #include "key_value_store/kv_flat_btree_async.h"
 #include "key_value_store/kvs_arg_types.h"
 #include "include/rados/librados.hpp"
-#include "/usr/include/asm-generic/errno.h"
-#include "/usr/include/asm-generic/errno-base.h"
 #include "common/ceph_context.h"
 #include "common/Clock.h"
 #include "include/types.h"
 
-
+#include <errno.h>
 #include <string>
 #include <iostream>
 #include <cassert>
@@ -244,13 +243,13 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     if (verbose) cout << "\t" << client_name
 	<< "-read_index: getting index_data for " << key
 	<< " from cache" << std::endl;
-    icache_lock.Lock();
+    icache_lock.lock();
     if (next_idata != NULL) {
       err = icache.get(key, idata, next_idata);
     } else {
       err = icache.get(key, idata);
     }
-    icache_lock.Unlock();
+    icache_lock.unlock();
 
     if (err == 0) {
       //if (verbose) cout << "CACHE SUCCESS" << std::endl;
@@ -279,7 +278,7 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     cerr << "\t" << client_name
 	<< "-read_index: getting keys failed with "
 	<< err << std::endl;
-    assert(0 == client_name + "-read_index: reading index failed");
+    ceph_abort_msg(client_name + "-read_index: reading index failed");
     return err;
   }
   kvmap.insert(dupmap.begin(), dupmap.end());
@@ -304,9 +303,8 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
       }
       return read_index(key, idata, next_idata, force_update);
     }
-    icache_lock.Lock();
+    std::scoped_lock l{icache_lock};
     icache.push(this_idata);
-    icache_lock.Unlock();
   }
   auto b = kvmap.begin()->second.cbegin();
   idata->decode(b);
@@ -315,18 +313,17 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
       << kvmap.size()
       << ", idata is " << idata->str() << std::endl;
 
-  assert(idata->obj != "");
-  icache_lock.Lock();
+  ceph_assert(idata->obj != "");
+  icache_lock.lock();
   icache.push(key, *idata);
-  icache_lock.Unlock();
+  icache_lock.unlock();
 
   if (next_idata != NULL && idata->kdata.prefix != "1") {
     next_idata->kdata.parse((++kvmap.begin())->first);
     auto nb = (++kvmap.begin())->second.cbegin();
     next_idata->decode(nb);
-    icache_lock.Lock();
+    std::scoped_lock l{icache_lock};
     icache.push(*next_idata);
-    icache_lock.Unlock();
   }
   return err;
 }
@@ -365,9 +362,9 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
 
   //for lower half object
   map<std::string, bufferlist>::const_iterator it = args.odata.omap.begin();
-  client_index_lock.Lock();
+  client_index_lock.lock();
   to_create.push_back(object_data(to_string(client_name, client_index++)));
-  client_index_lock.Unlock();
+  client_index_lock.unlock();
   for (int i = 0; i < k; i++) {
     to_create[0].omap.insert(*it);
     ++it;
@@ -376,11 +373,11 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   to_create[0].max_kdata = key_data(to_create[0].omap.rbegin()->first);
 
   //for upper half object
-  client_index_lock.Lock();
+  client_index_lock.lock();
   to_create.push_back(object_data(to_create[0].max_kdata,
         args.odata.max_kdata,
         to_string(client_name, client_index++)));
-  client_index_lock.Unlock();
+  client_index_lock.unlock();
   to_create[1].omap.insert(
       ++args.odata.omap.find(to_create[0].omap.rbegin()->first),
       args.odata.omap.end());
@@ -407,7 +404,7 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   if (verbose) cout << "\t\t" << client_name << "-split: done splitting."
       << std::endl;
   /////END CRITICAL SECTION/////
-  icache_lock.Lock();
+  icache_lock.lock();
   for (vector<delete_data>::iterator it = out_data.to_delete.begin();
       it != out_data.to_delete.end(); ++it) {
     icache.erase(it->max);
@@ -416,7 +413,7 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
       it != out_data.to_create.end(); ++it) {
     icache.push(index_data(*it));
   }
-  icache_lock.Unlock();
+  icache_lock.unlock();
   return err;
 }
 
@@ -534,9 +531,9 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
   }
 
   //this is the high object. it gets created regardless of rebalance or merge.
-  client_index_lock.Lock();
+  client_index_lock.lock();
   string o2w = to_string(client_name, client_index++);
-  client_index_lock.Unlock();
+  client_index_lock.unlock();
   index_data idata;
   vector<object_data> to_create;
   vector<object_data> to_delete;
@@ -561,7 +558,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     ops.push_back(make_pair(
 	pair<int, string>(MAKE_OBJECT, o2w),
 	&create[0]));
-    assert((int)write2_map.size() <= 2*k);
+    ceph_assert((int)write2_map.size() <= 2*k);
   } else {
     //rebalance
     if (verbose) cout << "\t\t" << client_name << "-rebalance: rebalancing "
@@ -570,9 +567,9 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     map<std::string, bufferlist> write1_map;
     map<std::string, bufferlist> write2_map;
     map<std::string, bufferlist>::iterator it;
-    client_index_lock.Lock();
+    client_index_lock.lock();
     string o1w = to_string(client_name, client_index++);
-    client_index_lock.Unlock();
+    client_index_lock.unlock();
     int target_size_1 = ceil(((int)args1.odata.size + (int)args2.odata.size)
 	/ 2.0);
     if (args1.odata.max_kdata != idata1.kdata) {
@@ -637,7 +634,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
   if (err < 0) {
     return err;
   }
-  icache_lock.Lock();
+  icache_lock.lock();
   for (vector<delete_data>::iterator it = out_data.to_delete.begin();
       it != out_data.to_delete.end(); ++it) {
     icache.erase(it->max);
@@ -646,7 +643,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       it != out_data.to_create.end(); ++it) {
     icache.push(index_data(*it));
   }
-  icache_lock.Unlock();
+  icache_lock.unlock();
   if (verbose) cout << "\t\t" << client_name << "-rebalance: done rebalancing."
       << std::endl;
   /////END CRITICAL SECTION/////
@@ -662,7 +659,7 @@ int KvFlatBtreeAsync::read_object(const string &obj, object_data * odata) {
   get_obj.omap_get_vals2("", LONG_MAX, &odata->omap, nullptr, &err);
   get_obj.getxattr("unwritable", &unw_bl, &err);
   io_ctx.aio_operate(obj, obj_aioc, &get_obj, NULL);
-  obj_aioc->wait_for_safe();
+  obj_aioc->wait_for_complete();
   err = obj_aioc->get_return_value();
   if (err < 0){
     //possibly -ENOENT, meaning someone else deleted it.
@@ -683,7 +680,7 @@ int KvFlatBtreeAsync::read_object(const string &obj, rebalance_args * args) {
   int err;
   librados::AioCompletion * a = rados.aio_create_completion();
   io_ctx.aio_exec(obj, a, "kvs", "maybe_read_for_balance", inbl, &outbl);
-  a->wait_for_safe();
+  a->wait_for_complete();
   err = a->get_return_value();
   if (err < 0) {
     if (verbose) cout << "\t\t" << client_name
@@ -741,7 +738,7 @@ void KvFlatBtreeAsync::set_up_prefix_index(
 	<< "-setup_prefix: will assert "
 	<< this_entry.str() << std::endl;
   }
-  assert(*err == 0);
+  ceph_assert(*err == 0);
   owo->omap_cmp(assertions, err);
   if (to_create.size() <= 2) {
     owo->omap_set(to_insert);
@@ -912,7 +909,7 @@ int KvFlatBtreeAsync::perform_ops(const string &debug_prefix,
       if ((int)idata.to_create.size() == count) {
 	cout << "starting aiowrite waiting loop" << std::endl;
 	  for (count -= 1; count >= 0; count--) {
-	    aiocs[count]->wait_for_safe();
+	    aiocs[count]->wait_for_complete();
 	    err = aiocs[count]->get_return_value();
 	    if (err < 0) {
 	      //this can happen if someone else was cleaning up after us.
@@ -996,7 +993,7 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &error) {
       << idata.str()
       << std::endl;
   int err = 0;
-  assert(idata.prefix != "");
+  ceph_assert(idata.prefix != "");
   map<std::string,bufferlist> new_index;
   map<std::string, pair<bufferlist, int> > assertions;
   switch (error) {
@@ -1829,7 +1826,7 @@ int KvFlatBtreeAsync::set_many(const map<string, bufferlist> &in_map) {
   encode(keys, inbl);
   librados::AioCompletion * aioc = rados.aio_create_completion();
   io_ctx.aio_exec(index_name, aioc,  "kvs", "read_many", inbl, &outbl);
-  aioc->wait_for_safe();
+  aioc->wait_for_complete();
   err = aioc->get_return_value();
   aioc->release();
   if (err < 0) {
@@ -1923,7 +1920,7 @@ int KvFlatBtreeAsync::set_many(const map<string, bufferlist> &in_map) {
   if (verbose) cout << "\t\t" << client_name << "-split: done splitting."
       << std::endl;
   /////END CRITICAL SECTION/////
-  icache_lock.Lock();
+  std::scoped_lock l{icache_lock};
   for (vector<delete_data>::iterator it = idata.to_delete.begin();
       it != idata.to_delete.end(); ++it) {
     icache.erase(it->max);
@@ -1932,7 +1929,6 @@ int KvFlatBtreeAsync::set_many(const map<string, bufferlist> &in_map) {
       it != idata.to_create.end(); ++it) {
     icache.push(index_data(*it));
   }
-  icache_lock.Unlock();
   return err;
 }
 
@@ -1951,7 +1947,7 @@ int KvFlatBtreeAsync::remove_all() {
     if (verbose) cout << "getting keys failed with error " << err << std::endl;
     return err;
   }
-  oro_aioc->wait_for_safe();
+  oro_aioc->wait_for_complete();
   oro_aioc->release();
 
   librados::ObjectWriteOperation rm_index;
@@ -2077,7 +2073,7 @@ bool KvFlatBtreeAsync::is_consistent() {
 	  bufferlist un;
 	  oro.getxattr("unwritable", &un, &err);
 	  io_ctx.aio_operate(dit->obj, aioc, &oro, NULL);
-	  aioc->wait_for_safe();
+	  aioc->wait_for_complete();
 	  err = aioc->get_return_value();
 	  if (ceph_clock_now() - idata.ts > timeout) {
 	    if (err < 0) {
@@ -2185,7 +2181,7 @@ string KvFlatBtreeAsync::str() {
   librados::AioCompletion * top_aioc = rados.aio_create_completion();
   oro.omap_get_vals2("",LONG_MAX,&index, nullptr, &err);
   io_ctx.aio_operate(index_name, top_aioc, &oro, NULL);
-  top_aioc->wait_for_safe();
+  top_aioc->wait_for_complete();
   err = top_aioc->get_return_value();
   top_aioc->release();
   if (err < 0 && err != -5){
@@ -2242,7 +2238,7 @@ string KvFlatBtreeAsync::str() {
     oro.omap_get_vals2("", LONG_MAX, &all_maps[indexer], nullptr, &err);
     oro.getxattr("unwritable", &all_unwrit[indexer], &err);
     io_ctx.aio_operate(*it, aioc, &oro, NULL);
-    aioc->wait_for_safe();
+    aioc->wait_for_complete();
     if (aioc->get_return_value() < 0) {
       ret << "reading" << *it << "failed: " << err << std::endl;
       //return ret.str();

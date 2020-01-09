@@ -1,12 +1,8 @@
 #ifndef CEPH_CLS_REFCOUNT_CLIENT_H
 #define CEPH_CLS_REFCOUNT_CLIENT_H
 
+#include "include/rados/librados_fwd.hpp"
 #include "include/types.h"
-
-namespace librados {
-  class ObjectWriteOperation;
-  class IoCtx;
-}
 
 /*
  * refcount objclass
@@ -33,6 +29,10 @@ namespace librados {
 void cls_refcount_get(librados::ObjectWriteOperation& op, const string& tag, bool implicit_ref = false);
 void cls_refcount_put(librados::ObjectWriteOperation& op, const string& tag, bool implicit_ref = false);
 void cls_refcount_set(librados::ObjectWriteOperation& op, list<string>& refs);
+// these overloads which call io_ctx.operate() or io_ctx.exec() should not be called in the rgw.
+// rgw_rados_operate() should be called after the overloads w/o calls to io_ctx.operate()/exec()
+#ifndef CLS_CLIENT_HIDE_IOCTX
 int cls_refcount_read(librados::IoCtx& io_ctx, string& oid, list<string> *refs, bool implicit_ref = false);
+#endif
 
 #endif

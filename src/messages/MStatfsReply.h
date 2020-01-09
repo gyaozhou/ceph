@@ -20,15 +20,16 @@ class MStatfsReply : public Message {
 public:
   struct ceph_mon_statfs_reply h{};
 
-  MStatfsReply() : Message(CEPH_MSG_STATFS_REPLY) {}
-  MStatfsReply(uuid_d &f, ceph_tid_t t, epoch_t epoch) : Message(CEPH_MSG_STATFS_REPLY) {
+  MStatfsReply() : Message{CEPH_MSG_STATFS_REPLY} {}
+  MStatfsReply(uuid_d &f, ceph_tid_t t, epoch_t epoch)
+    : Message{CEPH_MSG_STATFS_REPLY} {
     memcpy(&h.fsid, f.bytes(), sizeof(h.fsid));
     header.tid = t;
     h.version = epoch;
   }
 
-  const char *get_type_name() const override { return "statfs_reply"; }
-  void print(ostream& out) const override {
+  std::string_view get_type_name() const override { return "statfs_reply"; }
+  void print(std::ostream& out) const override {
     out << "statfs_reply(" << header.tid << ")";
   }
 
@@ -40,6 +41,9 @@ public:
     auto p = payload.cbegin();
     decode(h, p);
   }
+private:
+  template<class T, typename... Args>
+  friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
 };
 
 #endif
