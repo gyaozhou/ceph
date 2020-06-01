@@ -7,9 +7,10 @@
 #include "common/errno.h"
 #include "librbd/ExclusiveLock.h"
 #include "librbd/ImageCtx.h"
+#include "librbd/ImageWatcher.h"
 #include "librbd/ObjectMap.h"
 #include "librbd/Utils.h"
-#include "librbd/io/ImageRequestWQ.h"
+#include "librbd/io/ImageDispatcherInterface.h"
 #include "librbd/mirror/snapshot/SetImageStateRequest.h"
 
 #define dout_subsys ceph_subsys_rbd
@@ -29,10 +30,13 @@ SnapshotCreateRequest<I>::SnapshotCreateRequest(I &image_ctx,
 						const cls::rbd::SnapshotNamespace &snap_namespace,
                                                 const std::string &snap_name,
                                                 uint64_t journal_op_tid,
-                                                bool skip_object_map)
+                                                uint64_t flags,
+                                                ProgressContext &prog_ctx)
   : Request<I>(image_ctx, on_finish, journal_op_tid),
     m_snap_namespace(snap_namespace), m_snap_name(snap_name),
-    m_skip_object_map(skip_object_map), m_ret_val(0), m_snap_id(CEPH_NOSNAP) {
+    m_skip_object_map(flags & SNAP_CREATE_FLAG_SKIP_OBJECT_MAP),
+    m_skip_notify_quiesce(flags & SNAP_CREATE_FLAG_SKIP_NOTIFY_QUIESCE),
+    m_prog_ctx(prog_ctx) {
 }
 
 template <typename I>
@@ -46,7 +50,41 @@ void SnapshotCreateRequest<I>::send_op() {
     return;
   }
 
+  send_notify_quiesce();
+}
+
+template <typename I>
+void SnapshotCreateRequest<I>::send_notify_quiesce() {
+  if (m_skip_notify_quiesce) {
+    send_suspend_requests();
+    return;
+  }
+
+  I &image_ctx = this->m_image_ctx;
+  CephContext *cct = image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << dendl;
+
+  m_request_id = image_ctx.image_watcher->notify_quiesce(
+    m_prog_ctx, create_async_context_callback(
+      image_ctx, create_context_callback<SnapshotCreateRequest<I>,
+      &SnapshotCreateRequest<I>::handle_notify_quiesce>(this)));
+}
+
+template <typename I>
+Context *SnapshotCreateRequest<I>::handle_notify_quiesce(int *result) {
+  I &image_ctx = this->m_image_ctx;
+  CephContext *cct = image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << ": r=" << *result << dendl;
+
+  if (*result < 0) {
+    lderr(cct) << "failed to notify quiesce: " << cpp_strerror(*result)
+               << dendl;
+    return this->create_context_finisher(*result);
+  }
+
+  std::shared_lock owner_locker{image_ctx.owner_lock};
   send_suspend_requests();
+  return nullptr;
 }
 
 template <typename I>
@@ -78,7 +116,7 @@ void SnapshotCreateRequest<I>::send_suspend_aio() {
   CephContext *cct = image_ctx.cct;
   ldout(cct, 5) << this << " " << __func__ << dendl;
 
-  image_ctx.io_work_queue->block_writes(create_context_callback<
+  image_ctx.io_image_dispatcher->block_writes(create_context_callback<
     SnapshotCreateRequest<I>,
     &SnapshotCreateRequest<I>::handle_suspend_aio>(this));
 }
@@ -91,8 +129,8 @@ Context *SnapshotCreateRequest<I>::handle_suspend_aio(int *result) {
 
   if (*result < 0) {
     lderr(cct) << "failed to block writes: " << cpp_strerror(*result) << dendl;
-    image_ctx.io_work_queue->unblock_writes();
-    return this->create_context_finisher(*result);
+    save_result(result);
+    return send_notify_unquiesce();
   }
 
   send_append_op_event();
@@ -120,10 +158,10 @@ Context *SnapshotCreateRequest<I>::handle_append_op_event(int *result) {
   ldout(cct, 5) << this << " " << __func__ << ": r=" << *result << dendl;
 
   if (*result < 0) {
-    image_ctx.io_work_queue->unblock_writes();
     lderr(cct) << "failed to commit journal entry: " << cpp_strerror(*result)
                << dendl;
-    return this->create_context_finisher(*result);
+    save_result(result);
+    return send_notify_unquiesce();
   }
 
   send_allocate_snap_id();
@@ -151,11 +189,10 @@ Context *SnapshotCreateRequest<I>::handle_allocate_snap_id(int *result) {
                 << "snap_id=" << m_snap_id << dendl;
 
   if (*result < 0) {
-    save_result(result);
-    image_ctx.io_work_queue->unblock_writes();
     lderr(cct) << "failed to allocate snapshot id: " << cpp_strerror(*result)
                << dendl;
-    return this->create_context_finisher(*result);
+    save_result(result);
+    return send_notify_unquiesce();
   }
 
   send_create_snap();
@@ -245,9 +282,9 @@ Context *SnapshotCreateRequest<I>::handle_create_object_map(int *result) {
     lderr(cct) << this << " " << __func__ << ": failed to snapshot object map: "
                << cpp_strerror(*result) << dendl;
 
+    save_result(result);
     update_snap_context();
-    image_ctx.io_work_queue->unblock_writes();
-    return this->create_context_finisher(*result);
+    return send_notify_unquiesce();
   }
 
   return send_create_image_state();
@@ -256,12 +293,11 @@ Context *SnapshotCreateRequest<I>::handle_create_object_map(int *result) {
 template <typename I>
 Context *SnapshotCreateRequest<I>::send_create_image_state() {
   I &image_ctx = this->m_image_ctx;
-  auto type = cls::rbd::get_snap_namespace_type(m_snap_namespace);
-
-  if (type != cls::rbd::SNAPSHOT_NAMESPACE_TYPE_MIRROR_PRIMARY) {
+  auto mirror_ns = boost::get<cls::rbd::MirrorSnapshotNamespace>(
+    &m_snap_namespace);
+  if (mirror_ns == nullptr || !mirror_ns->is_primary()) {
     update_snap_context();
-    image_ctx.io_work_queue->unblock_writes();
-    return this->create_context_finisher(0);
+    return send_notify_unquiesce();
   }
 
   CephContext *cct = image_ctx.cct;
@@ -282,14 +318,13 @@ Context *SnapshotCreateRequest<I>::handle_create_image_state(int *result) {
   ldout(cct, 5) << this << " " << __func__ << ": r=" << *result << dendl;
 
   update_snap_context();
-  image_ctx.io_work_queue->unblock_writes();
   if (*result < 0) {
     lderr(cct) << this << " " << __func__ << ": failed to snapshot object map: "
                << cpp_strerror(*result) << dendl;
-    return this->create_context_finisher(*result);
+    save_result(result);
   }
 
-  return this->create_context_finisher(0);
+  return send_notify_unquiesce();
 }
 
 template <typename I>
@@ -313,10 +348,42 @@ Context *SnapshotCreateRequest<I>::handle_release_snap_id(int *result) {
   CephContext *cct = image_ctx.cct;
   ldout(cct, 5) << this << " " << __func__ << ": r=" << *result << dendl;
 
-  ceph_assert(m_ret_val < 0);
-  *result = m_ret_val;
+  return send_notify_unquiesce();
+}
 
-  image_ctx.io_work_queue->unblock_writes();
+template <typename I>
+Context *SnapshotCreateRequest<I>::send_notify_unquiesce() {
+  I &image_ctx = this->m_image_ctx;
+  CephContext *cct = image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << dendl;
+
+  image_ctx.io_image_dispatcher->unblock_writes();
+
+  if (m_skip_notify_quiesce) {
+    return this->create_context_finisher(m_ret_val);
+  }
+
+  image_ctx.image_watcher->notify_unquiesce(
+    m_request_id, create_context_callback<
+      SnapshotCreateRequest<I>,
+      &SnapshotCreateRequest<I>::handle_notify_unquiesce>(this));
+
+  return nullptr;
+}
+
+template <typename I>
+Context *SnapshotCreateRequest<I>::handle_notify_unquiesce(int *result) {
+  I &image_ctx = this->m_image_ctx;
+  CephContext *cct = image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << ": r=" << *result << dendl;
+
+  if (*result < 0) {
+    lderr(cct) << "failed to notify unquiesce: " << cpp_strerror(*result)
+               << dendl;
+    // ignore error
+  }
+
+  *result = m_ret_val;
   return this->create_context_finisher(m_ret_val);
 }
 
