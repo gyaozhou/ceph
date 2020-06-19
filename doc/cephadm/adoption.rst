@@ -81,6 +81,12 @@ Adoption process
 
      # ssh-copy-id -f -i ceph.pub root@<host>
 
+   .. note::
+     It is also possible to import an existing ssh key. See
+     :ref:`ssh errors <cephadm-ssh-errors>` in the troubleshooting
+     document for instructions describing how to import existing
+     ssh keys.
+
 #. Tell cephadm which hosts to manage::
 
      # ceph orch host add <hostname> [ip-address]
@@ -137,6 +143,9 @@ Adoption process
 
      # systemctl stop ceph-rgw.target
      # rm -rf /var/lib/ceph/radosgw/ceph-*
+
+   For adopting single-site systems without a realm, see also
+   :ref:`rgw-multisite-migrate-from-single-site`.
 
 #. Check the ``ceph health detail`` output for cephadm warnings about
    stray cluster daemons or hosts that are not yet managed.

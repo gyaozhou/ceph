@@ -63,7 +63,7 @@ AlienStore::AlienStore(const std::string& path, const ConfigValues& values)
   g_ceph_context = cct.get();
   cct->_conf.set_config_values(values);
   store = std::make_unique<BlueStore>(cct.get(), path);
-  tp = std::make_unique<crimson::thread::ThreadPool>(1, 128, seastar::this_shard_id() + 10);
+  tp = std::make_unique<crimson::os::ThreadPool>(1, 128, seastar::this_shard_id() + 10);
 }
 
 seastar::future<> AlienStore::start()
@@ -96,7 +96,7 @@ seastar::future<> AlienStore::mount()
 
 seastar::future<> AlienStore::umount()
 {
-  logger().debug("{}", __func__);
+  logger().info("{}", __func__);
   return transaction_gate.close().then([this] {
     return tp->submit([this] {
       return store->umount();

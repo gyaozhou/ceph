@@ -1522,6 +1522,11 @@ std::vector<Option> get_global_options() {
     .add_service("mgr")
     .set_description("issue REQUEST_SLOW health warning if OSD ops are slower than this age (seconds)"),
 
+    Option("mon_osd_warn_num_repaired", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(10)
+    .add_service("mon")
+    .set_description("issue OSD_TOO_MANY_REPAIRS health warning if an OSD has more than this many read repairs"),
+
     Option("mon_osd_err_op_age_ratio", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(128)
     .add_service("mgr")
@@ -4034,10 +4039,6 @@ std::vector<Option> get_global_options() {
     .set_enum_allowed({"bitmap", "stupid", "avl", "hybrid"})
     .set_description(""),
 
-    Option("bluefs_preextend_wal_files", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
-    .set_default(true)
-    .set_description("Preextent rocksdb wal files on mkfs to avoid performance penalty"),
-
     Option("bluefs_log_replay_check_allocations", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
       .set_default(true)
       .set_description("Enables checks for allocations consistency during log replay"),
@@ -4424,7 +4425,7 @@ std::vector<Option> get_global_options() {
     .set_description("max duration to force deferred submit"),
 
     Option("bluestore_rocksdb_options", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_default("compression=kNoCompression,max_write_buffer_number=4,min_write_buffer_number_to_merge=1,recycle_log_file_num=4,write_buffer_size=268435456,writable_file_max_buffer_size=0,compaction_readahead_size=2097152,max_background_compactions=2")
+    .set_default("compression=kNoCompression,max_write_buffer_number=4,min_write_buffer_number_to_merge=1,recycle_log_file_num=4,write_buffer_size=268435456,writable_file_max_buffer_size=0,compaction_readahead_size=2097152,max_background_compactions=2,max_total_wal_size=1073741824")
     .set_description("Rocksdb options"),
 
     Option("bluestore_rocksdb_cf", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
@@ -4657,11 +4658,23 @@ std::vector<Option> get_global_options() {
 
     Option("bluestore_avl_alloc_bf_threshold", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(131072)
-    .set_description(""),
+    .set_description("Sets threshold at which shrinking max free chunk size triggers enabling best-fit mode.")
+    .set_long_description("AVL allocator works in two modes: near-fit and best-fit. By default, it uses very fast near-fit mode, "
+			  "in which it tries to fit a new block near the last allocated block of similar size. The second mode "
+			  "is much slower best-fit mode, in which it tries to find an exact match for the requested allocation. "
+			  "This mode is used when either the device gets fragmented or when it is low on free space. "
+			  "When the largest free block is smaller than 'bluestore_avl_alloc_bf_threshold', best-fit mode is used.")
+    .add_see_also("bluestore_avl_alloc_bf_free_pct"),
 
     Option("bluestore_avl_alloc_bf_free_pct", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(4)
-    .set_description(""),
+    .set_description("Sets threshold at which shrinking free space (in %, integer) triggers enabling best-fit mode.")
+    .set_long_description("AVL allocator works in two modes: near-fit and best-fit. By default, it uses very fast near-fit mode, "
+			  "in which it tries to fit a new block near the last allocated block of similar size. The second mode "
+			  "is much slower best-fit mode, in which it tries to find an exact match for the requested allocation. "
+			  "This mode is used when either the device gets fragmented or when it is low on free space. "
+			  "When free space is smaller than 'bluestore_avl_alloc_bf_free_pct', best-fit mode is used.")
+    .add_see_also("bluestore_avl_alloc_bf_threshold"),
 
     Option("bluestore_hybrid_alloc_mem_cap", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(64_M)
@@ -6401,6 +6414,15 @@ std::vector<Option> get_rgw_options() {
     .set_default(1_M)
     .set_description("Send copy-object progress info after these many bytes"),
 
+    Option("rgw_sync_obj_etag_verify", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description("Verify if the object copied from remote is identical to its source")
+    .set_long_description(
+        "If true, this option computes the MD5 checksum of the data which is written at the "
+	"destination and checks if it is identical to the ETAG stored in the source. "
+        "It ensures integrity of the objects fetched from a remote server over HTTP including "
+        "multisite sync."),
+
     Option("rgw_obj_tombstone_cache_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(1000)
     .set_description("Max number of entries to keep in tombstone cache")
@@ -6557,8 +6579,9 @@ std::vector<Option> get_rgw_options() {
     .set_default(1000)
     .set_description("Max number of buckets per user")
     .set_long_description(
-        "A user can create this many buckets. Zero means unlimited, negative number means "
-        "user cannot create any buckets (although user will retain buckets already created."),
+      "A user can create at most this number of buckets. Zero means "
+      "no limit; a negative value means users cannot create any new "
+      "buckets, although users will retain buckets already created."),
 
     Option("rgw_objexp_gc_interval", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(10_min)
@@ -7570,6 +7593,11 @@ static std::vector<Option> get_rbd_options() {
     .set_min(1)
     .set_description("the number of quiesce notification attempts"),
 
+    Option("rbd_default_snapshot_quiesce_mode", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("required")
+    .set_enum_allowed({"required", "ignore-error", "skip"})
+    .set_description("default snapshot quiesce mode"),
+
     Option("rbd_plugins", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
     .set_description("comma-delimited list of librbd plugins to enable"),
@@ -8311,7 +8339,25 @@ std::vector<Option> get_mds_options() {
     .set_default(2)
     .set_min(1)
     .set_description("Size of thread pool for ASIO completions")
-    .add_tag("mds")
+    .add_tag("mds"),
+
+    Option("mds_ping_grace", Option::TYPE_SECS, Option::LEVEL_ADVANCED)
+     .set_default(15)
+     .set_flag(Option::FLAG_RUNTIME)
+     .set_description("timeout after which an MDS is considered laggy by rank 0 MDS.")
+     .set_long_description("timeout for replying to a ping message sent by rank 0 after which an active MDS considered laggy (delayed metrics) by rank 0."),
+
+    Option("mds_ping_interval", Option::TYPE_SECS, Option::LEVEL_ADVANCED)
+     .set_default(5)
+     .set_flag(Option::FLAG_RUNTIME)
+     .set_description("interval in seconds for sending ping messages to active MDSs.")
+     .set_long_description("interval in seconds for rank 0 to send ping messages to all active MDSs."),
+
+    Option("mds_metrics_update_interval", Option::TYPE_SECS, Option::LEVEL_ADVANCED)
+     .set_default(2)
+     .set_flag(Option::FLAG_RUNTIME)
+     .set_description("interval in seconds for metrics data update.")
+     .set_long_description("interval in seconds after which active MDSs send client metrics data to rank 0.")
   });
 }
 
@@ -8491,9 +8537,11 @@ std::vector<Option> get_mds_client_options() {
     .set_default(true)
     .set_description("pass atomic_o_trunc flag to FUSE on mount"),
 
-    Option("fuse_debug", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    Option("fuse_debug", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
-    .set_description(""),
+    .set_flag(Option::FLAG_STARTUP)
+    .set_flag(Option::FLAG_NO_MON_UPDATE)
+    .set_description("enable debugging for the libfuse"),
 
     Option("fuse_multithreaded", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)

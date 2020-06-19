@@ -63,7 +63,7 @@ export class UserFormComponent extends CdForm implements OnInit {
     private authService: AuthService,
     private authStorageService: AuthStorageService,
     private route: ActivatedRoute,
-    private router: Router,
+    public router: Router,
     private modalService: BsModalService,
     private roleService: RoleService,
     private userService: UserService,
@@ -209,7 +209,7 @@ export class UserFormComponent extends CdForm implements OnInit {
       () => {
         this.notificationService.show(
           NotificationType.success,
-          this.i18n('Created user "{{username}}"', { username: userFormModel.username })
+          this.i18n(`Created user '{{username}}'`, { username: userFormModel.username })
         );
         this.router.navigate(['/user-management/users']);
       },
@@ -284,7 +284,7 @@ export class UserFormComponent extends CdForm implements OnInit {
         } else {
           this.notificationService.show(
             NotificationType.success,
-            this.i18n('Updated user "{{username}}"', { username: userFormModel.username })
+            this.i18n(`Updated user '{{username}}'`, { username: userFormModel.username })
           );
           this.router.navigate(['/user-management/users']);
         }

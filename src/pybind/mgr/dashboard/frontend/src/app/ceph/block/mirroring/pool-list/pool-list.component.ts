@@ -94,10 +94,7 @@ export class PoolListComponent implements OnInit, OnDestroy {
       }
     ];
 
-    this.subs = this.rbdMirroringService.subscribeSummary((data: any) => {
-      if (!data) {
-        return;
-      }
+    this.subs = this.rbdMirroringService.subscribeSummary((data) => {
       this.data = data.content_data.pools;
     });
   }
@@ -145,14 +142,13 @@ export class PoolListComponent implements OnInit, OnDestroy {
                 }),
                 call: this.rbdMirroringService.deletePeer(poolName, peerUUID)
               })
-              .subscribe(
-                undefined,
-                (resp) => observer.error(resp),
-                () => {
+              .subscribe({
+                error: (resp) => observer.error(resp),
+                complete: () => {
                   this.rbdMirroringService.refresh();
                   observer.complete();
                 }
-              );
+              });
           })
       }
     });

@@ -3,9 +3,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
 import { RouterTestingModule } from '@angular/router/testing';
 
-import { BsDropdownModule } from 'ngx-bootstrap/dropdown';
 import { BsModalRef, BsModalService, ModalModule } from 'ngx-bootstrap/modal';
-import { TabsModule } from 'ngx-bootstrap/tabs';
 import { ToastrModule } from 'ngx-toastr';
 import { of } from 'rxjs';
 
@@ -31,8 +29,6 @@ describe('SilenceListComponent', () => {
     imports: [
       BrowserAnimationsModule,
       SharedModule,
-      BsDropdownModule.forRoot(),
-      TabsModule.forRoot(),
       ModalModule.forRoot(),
       ToastrModule.forRoot(),
       RouterTestingModule,
@@ -45,7 +41,7 @@ describe('SilenceListComponent', () => {
   beforeEach(() => {
     fixture = TestBed.createComponent(SilenceListComponent);
     component = fixture.componentInstance;
-    prometheusService = TestBed.get(PrometheusService);
+    prometheusService = TestBed.inject(PrometheusService);
   });
 
   it('should create', () => {
@@ -117,7 +113,7 @@ describe('SilenceListComponent', () => {
       const mockObservable = () => of([]);
       spyOn(component, 'refresh').and.callFake(mockObservable);
       spyOn(prometheusService, 'expireSilence').and.callFake(mockObservable);
-      spyOn(TestBed.get(BsModalService), 'show').and.callFake((deletionClass, config) => {
+      spyOn(TestBed.inject(BsModalService), 'show').and.callFake((deletionClass, config) => {
         return {
           content: Object.assign(new deletionClass(), config.initialState)
         };
@@ -125,7 +121,7 @@ describe('SilenceListComponent', () => {
     });
 
     it('should expire a silence', () => {
-      const notificationService = TestBed.get(NotificationService);
+      const notificationService = TestBed.inject(NotificationService);
       spyOn(notificationService, 'show').and.stub();
       expectSilenceToExpire('someSilenceId');
       expect(notificationService.show).toHaveBeenCalledWith(

@@ -4,6 +4,7 @@ Ceph cluster task, deployed via cephadm orchestrator
 import argparse
 import configobj
 import contextlib
+import errno
 import logging
 import os
 import json
@@ -290,7 +291,15 @@ def ceph_crash(ctx, config):
                     pass
 
 @contextlib.contextmanager
-def ceph_bootstrap(ctx, config):
+def ceph_bootstrap(ctx, config, registry):
+    """
+    Bootstrap ceph cluster, setup containers' registry mirror before
+    the bootstrap if the registry is provided.
+
+    :param ctx: the argparse.Namespace object
+    :param config: the config dict
+    :param registry: url to  containers' mirror registry
+    """
     cluster_name = config['cluster']
     testdir = teuthology.get_testdir(ctx)
     fsid = ctx.ceph[cluster_name].fsid
@@ -306,7 +315,8 @@ def ceph_bootstrap(ctx, config):
     ctx.cluster.run(args=[
         'sudo', 'chmod', '777', '/etc/ceph',
         ]);
-    add_mirror_to_cluster(ctx, config.get('docker_registry_mirror', 'vossi04.front.sepia.ceph.com:5000'))
+    if registry:
+        add_mirror_to_cluster(ctx, registry)
     try:
         # write seed config
         log.info('Writing seed config...')
@@ -454,9 +464,13 @@ def ceph_bootstrap(ctx, config):
         #ctx.cluster.run(args=['sudo', 'systemctl', 'stop', 'ceph.target'])
 
         # so, stop them individually
-        for role in ctx.daemons.resolve_role_list(None, CEPH_ROLE_TYPES):
+        for role in ctx.daemons.resolve_role_list(None, CEPH_ROLE_TYPES, True):
             cluster, type_, id_ = teuthology.split_role(role)
-            ctx.daemons.get_daemon(type_, id_, cluster).stop()
+            try:
+                ctx.daemons.get_daemon(type_, id_, cluster).stop()
+            except Exception:
+                log.exception(f'Failed to stop "{role}"')
+                raise 
 
         # clean up /etc/ceph
         ctx.cluster.run(args=[
@@ -717,12 +731,27 @@ def ceph_rgw(ctx, config):
                 nodes[realmzone] = []
             nodes[realmzone].append(remote.shortname + '=' + id_)
             daemons[role] = (remote, id_)
+
+    for realmzone in nodes.keys():
+        (realm, zone) = realmzone.split('.', 1)
+
+        # TODO: those should be moved to mgr/cephadm
+        _shell(ctx, cluster_name, remote,
+               ['radosgw-admin', 'realm', 'create', '--rgw-realm', realm, '--default']
+        )
+        _shell(ctx, cluster_name, remote,
+               ['radosgw-admin', 'zonegroup', 'create', '--rgw-zonegroup=default', '--master', '--default']
+        )
+        _shell(ctx, cluster_name, remote,
+               ['radosgw-admin', 'zone', 'create', '--rgw-zonegroup=default', '--rgw-zone', zone,  '--master', '--default']
+        )
+
     for realmzone, nodes in nodes.items():
         (realm, zone) = realmzone.split('.', 1)
         _shell(ctx, cluster_name, remote, [
-            'ceph', 'orch', 'apply', 'rgw',
-            realm, zone,
-            str(len(nodes)) + ';' + ';'.join(nodes)]
+            'ceph', 'orch', 'apply', 'rgw', realm, zone,
+             '--placement',
+             str(len(nodes)) + ';' + ';'.join(nodes)]
         )
     for role, i in daemons.items():
         remote, id_ = i
@@ -1054,6 +1083,34 @@ def initialize_config(ctx, config):
 
 @contextlib.contextmanager
 def task(ctx, config):
+    """
+    Deploy ceph cluster using cephadm
+
+    Setup containers' mirrors before the bootstrap, if corresponding
+    config provided in teuthology server config yaml file.
+
+    For example, teuthology.yaml can contain the 'defaults' section:
+
+        defaults:
+          cephadm:
+            containers:
+              registry_mirrors:
+                docker.io: 'registry.mirror.example.com:5000'
+              image: 'quay.io/ceph-ci/ceph'
+
+    Using overrides makes it possible to customize it per run.
+    The equivalent 'overrides' section looks like:
+
+        overrides:
+          cephadm:
+            containers:
+              registry_mirrors:
+                docker.io: 'registry.mirror.example.com:5000'
+              image: 'quay.io/ceph-ci/ceph'
+
+    :param ctx: the argparse.Namespace object
+    :param config: the config dict
+    """
     if config is None:
         config = {}
 
@@ -1062,6 +1119,7 @@ def task(ctx, config):
 
     overrides = ctx.config.get('overrides', {})
     teuthology.deep_merge(config, overrides.get('ceph', {}))
+    teuthology.deep_merge(config, overrides.get('cephadm', {}))
     log.info('Config: ' + str(config))
 
     testdir = teuthology.get_testdir(ctx)
@@ -1078,19 +1136,39 @@ def task(ctx, config):
         ctx.ceph[cluster_name].bootstrapped = False
  
     # image
+    teuth_defaults = teuth_config.get('defaults', {})
+    cephadm_defaults = teuth_defaults.get('cephadm', {})
+    containers_defaults = cephadm_defaults.get('containers', {})
+    mirrors_defaults = containers_defaults.get('registry_mirrors', {})
+    container_registry_mirror = mirrors_defaults.get('docker.io', None)
+    container_image_name = containers_defaults.get('image', None)
+
+    containers = config.get('containers', {})
+    mirrors = containers.get('registry_mirrors', {})
+    container_image_name = containers.get('image', container_image_name)
+    container_registry_mirror = mirrors.get('docker.io',
+                                            container_registry_mirror)
+
+    if not container_image_name:
+        raise Exception("Configuration error occurred. "
+                        "The 'image' value is undefined for 'cephadm' task. "
+                        "Please provide corresponding options in the task's "
+                        "config, task 'overrides', or teuthology 'defaults' "
+                        "section.")
+
     if not hasattr(ctx.ceph[cluster_name], 'image'):
         ctx.ceph[cluster_name].image = config.get('image')
     ref = None
     if not ctx.ceph[cluster_name].image:
         sha1 = config.get('sha1')
         if sha1:
-            ctx.ceph[cluster_name].image = 'quay.io/ceph-ci/ceph:%s' % sha1
+            ctx.ceph[cluster_name].image = container_image_name + ':' + sha1
             ref = sha1
         else:
             # hmm, fall back to branch?
             branch = config.get('branch', 'master')
             ref = branch
-            ctx.ceph[cluster_name].image = 'quay.io/ceph-ci/ceph:%s' % branch
+            ctx.ceph[cluster_name].image = container_image_name + ':' + branch
     log.info('Cluster image is %s' % ctx.ceph[cluster_name].image)
 
 
@@ -1105,7 +1183,8 @@ def task(ctx, config):
             lambda: ceph_log(ctx=ctx, config=config),
             lambda: ceph_crash(ctx=ctx, config=config),
             lambda: _bypass() if (ctx.ceph[cluster_name].bootstrapped)\
-                              else ceph_bootstrap(ctx=ctx, config=config),
+                              else ceph_bootstrap(ctx, config,
+                                                  container_registry_mirror),
             lambda: crush_setup(ctx=ctx, config=config),
             lambda: ceph_mons(ctx=ctx, config=config),
             lambda: distribute_config_and_admin_keyring(ctx=ctx, config=config),
@@ -1186,6 +1265,9 @@ def add_mirror_to_cluster(ctx, mirror):
                 path=registries_conf,
                 data=new_config,
             )
-        except FileNotFoundError as e:
+        except IOError as e:  # py3: use FileNotFoundError instead.
+            if e.errno != errno.ENOENT:
+                raise
+
             # Docker doesn't ship a registries.conf
             log.info('Failed to add mirror: %s' % str(e))

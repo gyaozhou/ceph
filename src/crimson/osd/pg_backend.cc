@@ -15,6 +15,7 @@
 #include "os/Transaction.h"
 #include "common/Clock.h"
 
+#include "crimson/common/exception.h"
 #include "crimson/os/futurized_collection.h"
 #include "crimson/os/futurized_store.h"
 #include "crimson/osd/osd_operation.h"
@@ -64,6 +65,10 @@ PGBackend::PGBackend(shard_id_t shard,
 PGBackend::load_metadata_ertr::future<PGBackend::loaded_object_md_t::ref>
 PGBackend::load_metadata(const hobject_t& oid)
 {
+  if (__builtin_expect(stopping, false)) {
+    throw crimson::common::system_shutdown_exception();
+  }
+
   return store->get_attrs(
     coll,
     ghobject_t{oid, ghobject_t::NO_GEN, shard}).safe_then(
@@ -124,6 +129,9 @@ PGBackend::mutate_object(
   epoch_t map_epoch,
   std::vector<pg_log_entry_t>&& log_entries)
 {
+  if (__builtin_expect((bool)peering, false)) {
+    throw crimson::common::actingset_changed(peering->is_primary);
+  }
   logger().trace("mutate_object: num_ops={}", txn.get_num_ops());
   if (obc->obs.exists) {
 #if 0
@@ -377,6 +385,10 @@ seastar::future<> PGBackend::remove(ObjectState& os,
 seastar::future<std::tuple<std::vector<hobject_t>, hobject_t>>
 PGBackend::list_objects(const hobject_t& start, uint64_t limit) const
 {
+  if (__builtin_expect(stopping, false)) {
+    throw crimson::common::system_shutdown_exception();
+  }
+
   auto gstart = start.is_min() ? ghobject_t{} : ghobject_t{start, 0, shard};
   return store->list_objects(coll,
                              gstart,
@@ -465,6 +477,10 @@ PGBackend::get_attr_errorator::future<ceph::bufferptr> PGBackend::getxattr(
   const hobject_t& soid,
   std::string_view key) const
 {
+  if (__builtin_expect(stopping, false)) {
+    throw crimson::common::system_shutdown_exception();
+  }
+
   return store->get_attr(coll, ghobject_t{soid}, key);
 }
 
@@ -509,6 +525,10 @@ seastar::future<> PGBackend::omap_get_keys(
   const ObjectState& os,
   OSDOp& osd_op) const
 {
+  if (__builtin_expect(stopping, false)) {
+    throw crimson::common::system_shutdown_exception();
+  }
+
   std::string start_after;
   uint64_t max_return;
   try {
@@ -551,6 +571,10 @@ seastar::future<> PGBackend::omap_get_vals(
   const ObjectState& os,
   OSDOp& osd_op) const
 {
+  if (__builtin_expect(stopping, false)) {
+    throw crimson::common::system_shutdown_exception();
+  }
+
   std::string start_after;
   uint64_t max_return;
   std::string filter_prefix;
@@ -602,6 +626,10 @@ seastar::future<> PGBackend::omap_get_vals_by_keys(
   const ObjectState& os,
   OSDOp& osd_op) const
 {
+  if (__builtin_expect(stopping, false)) {
+    throw crimson::common::system_shutdown_exception();
+  }
+
   std::set<std::string> keys_to_get;
   try {
     auto p = osd_op.indata.cbegin();
@@ -666,5 +694,9 @@ PGBackend::fiemap(
   uint64_t len)
 {
   return store->fiemap(c, oid, off, len);
+}
+
+void PGBackend::on_activate_complete() {
+  peering.reset();
 }
 

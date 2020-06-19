@@ -128,6 +128,7 @@
 #include "messages/MClientLease.h"
 #include "messages/MClientSnap.h"
 #include "messages/MClientQuota.h"
+#include "messages/MClientMetrics.h"
 
 #include "messages/MMDSSlaveRequest.h"
 
@@ -174,6 +175,8 @@
 #include "messages/MHeartbeat.h"
 
 #include "messages/MMDSTableRequest.h"
+#include "messages/MMDSMetrics.h"
+#include "messages/MMDSPing.h"
 
 //#include "messages/MInodeUpdate.h"
 #include "messages/MCacheExpire.h"
@@ -210,6 +213,10 @@
 
 #include "messages/MOSDPGUpdateLogMissing.h"
 #include "messages/MOSDPGUpdateLogMissingReply.h"
+
+#ifdef WITH_BLKIN
+#include "Messenger.h"
+#endif
 
 #define DEBUGLVL  10    // debug level of output
 
@@ -682,6 +689,9 @@ Message *decode_message(CephContext *cct,
   case CEPH_MSG_CLIENT_QUOTA:
     m = make_message<MClientQuota>();
     break;
+  case CEPH_MSG_CLIENT_METRICS:
+    m = make_message<MClientMetrics>();
+    break;
 
     // mds
   case MSG_MDS_SLAVE_REQUEST:
@@ -829,6 +839,14 @@ Message *decode_message(CephContext *cct,
     m = make_message<MLock>();
     break;
 
+  case MSG_MDS_METRICS:
+    m = make_message<MMDSMetrics>();
+    break;
+
+  case MSG_MDS_PING:
+    m = make_message<MMDSPing>();
+    break;
+
   case MSG_MGR_BEACON:
     m = make_message<MMgrBeacon>();
     break;
@@ -973,12 +991,12 @@ void Message::decode_trace(ceph::bufferlist::const_iterator &p, bool create)
   const auto msgr = connection->get_messenger();
   const auto endpoint = msgr->get_trace_endpoint();
   if (info.trace_id) {
-    trace.init(get_type_name(), endpoint, &info, true);
+    trace.init(get_type_name().data(), endpoint, &info, true);
     trace.event("decoded trace");
   } else if (create || (msgr->get_myname().is_osd() &&
                         msgr->cct->_conf->osd_blkin_trace_all)) {
     // create a trace even if we didn't get one on the wire
-    trace.init(get_type_name(), endpoint);
+    trace.init(get_type_name().data(), endpoint);
     trace.event("created trace");
   }
   trace.keyval("tid", get_tid());

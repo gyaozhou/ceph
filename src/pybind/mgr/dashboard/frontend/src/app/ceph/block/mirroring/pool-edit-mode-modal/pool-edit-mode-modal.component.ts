@@ -59,12 +59,8 @@ export class PoolEditModeModalComponent implements OnInit, OnDestroy {
       this.setResponse(resp);
     });
 
-    this.subs = this.rbdMirroringService.subscribeSummary((data: any) => {
+    this.subs = this.rbdMirroringService.subscribeSummary((data) => {
       this.peerExists = false;
-      if (!data) {
-        return;
-      }
-
       const poolData = data.content_data.pools;
       const pool = poolData.find((o: any) => this.poolName === o['name']);
       this.peerExists = pool && pool['peer_uuids'].length;
@@ -97,13 +93,12 @@ export class PoolEditModeModalComponent implements OnInit, OnDestroy {
       call: this.rbdMirroringService.updatePool(this.poolName, request)
     });
 
-    action.subscribe(
-      undefined,
-      () => this.editModeForm.setErrors({ cdSubmitButton: true }),
-      () => {
+    action.subscribe({
+      error: () => this.editModeForm.setErrors({ cdSubmitButton: true }),
+      complete: () => {
         this.rbdMirroringService.refresh();
         this.modalRef.hide();
       }
-    );
+    });
   }
 }

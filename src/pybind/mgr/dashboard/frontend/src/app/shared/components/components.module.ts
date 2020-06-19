@@ -3,15 +3,17 @@ import { NgModule } from '@angular/core';
 import { FormsModule, ReactiveFormsModule } from '@angular/forms';
 import { RouterModule } from '@angular/router';
 
+import {
+  NgbAlertModule,
+  NgbDropdownModule,
+  NgbPopoverModule,
+  NgbProgressbarModule,
+  NgbTooltipModule
+} from '@ng-bootstrap/ng-bootstrap';
 import { NgBootstrapFormValidationModule } from 'ng-bootstrap-form-validation';
 import { ClickOutsideModule } from 'ng-click-outside';
 import { ChartsModule } from 'ng2-charts';
-import { AlertModule } from 'ngx-bootstrap/alert';
-import { BsDropdownModule } from 'ngx-bootstrap/dropdown';
 import { ModalModule } from 'ngx-bootstrap/modal';
-import { PopoverModule } from 'ngx-bootstrap/popover';
-import { ProgressbarModule } from 'ngx-bootstrap/progressbar';
-import { TooltipModule } from 'ngx-bootstrap/tooltip';
 import { SimplebarAngularModule } from 'simplebar-angular';
 
 import { DirectivesModule } from '../directives/directives.module';
@@ -44,16 +46,16 @@ import { ViewCacheComponent } from './view-cache/view-cache.component';
     CommonModule,
     FormsModule,
     ReactiveFormsModule,
-    AlertModule.forRoot(),
-    PopoverModule.forRoot(),
-    ProgressbarModule.forRoot(),
-    TooltipModule.forRoot(),
+    NgbAlertModule,
+    NgbPopoverModule,
+    NgbProgressbarModule,
+    NgbTooltipModule,
     ChartsModule,
     ReactiveFormsModule,
     PipesModule,
     ModalModule.forRoot(),
     DirectivesModule,
-    BsDropdownModule,
+    NgbDropdownModule,
     NgBootstrapFormValidationModule,
     ClickOutsideModule,
     SimplebarAngularModule,
@@ -103,12 +105,6 @@ import { ViewCacheComponent } from './view-cache/view-cache.component';
     AlertPanelComponent,
     PwdExpirationNotificationComponent,
     OrchestratorDocPanelComponent
-  ],
-  entryComponents: [
-    ModalComponent,
-    CriticalConfirmationModalComponent,
-    ConfirmationModalComponent,
-    FormModalComponent
   ]
 })
 export class ComponentsModule {}

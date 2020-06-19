@@ -21,6 +21,7 @@ from ceph.deployment import inventory
 from ceph.deployment.service_spec import ServiceSpec, NFSServiceSpec, RGWSpec, \
     ServiceSpecValidationError, IscsiServiceSpec
 from ceph.deployment.drive_group import DriveGroupSpec
+from ceph.deployment.hostspec import HostSpec
 
 from mgr_module import MgrModule, CLICommand, HandleCommandResult
 
@@ -855,24 +856,25 @@ class Orchestrator(object):
         """
         raise NotImplementedError()
 
-    def apply(self, specs: List[ServiceSpec]) -> Completion:
+    def apply(self, specs: List["GenericSpec"]) -> Completion:
         """
         Applies any spec
         """
-        fns: Dict[str, Callable[[ServiceSpec], Completion]] = {
+        fns: Dict[str, function] = {
             'alertmanager': self.apply_alertmanager,
             'crash': self.apply_crash,
             'grafana': self.apply_grafana,
-            'iscsi': cast(Callable[[ServiceSpec], Completion], self.apply_iscsi),
+            'iscsi': self.apply_iscsi,
             'mds': self.apply_mds,
             'mgr': self.apply_mgr,
             'mon': self.apply_mon,
-            'nfs': cast(Callable[[ServiceSpec], Completion], self.apply_nfs),
+            'nfs': self.apply_nfs,
             'node-exporter': self.apply_node_exporter,
-            'osd': cast(Callable[[ServiceSpec], Completion], lambda dg: self.apply_drivegroups([dg])),
+            'osd': lambda dg: self.apply_drivegroups([dg]),
             'prometheus': self.apply_prometheus,
             'rbd-mirror': self.apply_rbd_mirror,
-            'rgw': cast(Callable[[ServiceSpec], Completion], self.apply_rgw),
+            'rgw': self.apply_rgw,
+            'host': self.add_host,
         }
 
         def merge(ls, r):
@@ -882,10 +884,12 @@ class Orchestrator(object):
 
         spec, *specs = specs
 
-        completion = fns[spec.service_type](spec)
+        fn = cast(Callable[["GenericSpec"], Completion], fns[spec.service_type])
+        completion = fn(spec)
         for s in specs:
             def next(ls):
-                return fns[s.service_type](s).then(lambda r: merge(ls, r))
+                fn = cast(Callable[["GenericSpec"], Completion], fns[spec.service_type])
+                return fn(s).then(lambda r: merge(ls, r))
             completion = completion.then(next)
         return completion
 
@@ -1159,53 +1163,14 @@ class Orchestrator(object):
         raise NotImplementedError()
 
 
-class HostSpec(object):
-    """
-    Information about hosts. Like e.g. ``kubectl get nodes``
-    """
-    def __init__(self,
-                 hostname,  # type: str
-                 addr=None,  # type: Optional[str]
-                 labels=None,  # type: Optional[List[str]]
-                 status=None,  # type: Optional[str]
-                 ):
-        #: the bare hostname on the host. Not the FQDN.
-        self.hostname = hostname  # type: str
+GenericSpec = Union[ServiceSpec, HostSpec]
 
-        #: DNS name or IP address to reach it
-        self.addr = addr or hostname  # type: str
-
-        #: label(s), if any
-        self.labels = labels or []  # type: List[str]
-
-        #: human readable status
-        self.status = status or ''  # type: str
-
-    def to_json(self):
-        return {
-            'hostname': self.hostname,
-            'addr': self.addr,
-            'labels': self.labels,
-            'status': self.status,
-        }
-
-    def __repr__(self):
-        args = [self.hostname]  # type: List[Any]
-        if self.addr is not None:
-            args.append(self.addr)
-        if self.labels:
-            args.append(self.labels)
-        if self.status:
-            args.append(self.status)
-
-        return "<HostSpec>({})".format(', '.join(map(repr, args)))
-
-    def __eq__(self, other):
-        # Let's omit `status` for the moment, as it is still the very same host.
-        return self.hostname == other.hostname and \
-               self.addr == other.addr and \
-               self.labels == other.labels
-
+def json_to_generic_spec(spec):
+    # type: (dict) -> GenericSpec
+    if 'service_type' in spec and spec['service_type'] == 'host':
+        return HostSpec.from_json(spec)
+    else:
+        return ServiceSpec.from_json(spec)
 
 class UpgradeStatusSpec(object):
     # Orchestrator's report on what's going on with any ongoing upgrade
@@ -1257,7 +1222,7 @@ class DaemonDescription(object):
                  osdspec_affinity=None,
                  last_deployed=None):
         # Host is at the same granularity as InventoryHost
-        self.hostname = hostname
+        self.hostname: str = hostname
 
         # Not everyone runs in containers, but enough people do to
         # justify having the container_id (runtime id) and container_image
@@ -1313,19 +1278,22 @@ class DaemonDescription(object):
                 # TODO: can a DaemonDescription exist without a hostname?
                 raise err
 
-            if self.hostname == self.daemon_id:
-                # daemon_id == "hostname"
+            # use the bare hostname, not the FQDN.
+            host = self.hostname.split('.')[0]
+
+            if host == self.daemon_id:
+                # daemon_id == "host"
                 return self.daemon_id
 
-            elif self.hostname in self.daemon_id:
-                # daemon_id == "service_id.hostname"
-                # daemon_id == "service_id.hostname.random"
-                pre, post = self.daemon_id.rsplit(self.hostname, 1)
+            elif host in self.daemon_id:
+                # daemon_id == "service_id.host"
+                # daemon_id == "service_id.host.random"
+                pre, post = self.daemon_id.rsplit(host, 1)
                 if not pre.endswith('.'):
-                    # '.' sep missing at front of hostname
+                    # '.' sep missing at front of host
                     raise err
                 elif post and not post.startswith('.'):
-                    # '.' sep missing at end of hostname
+                    # '.' sep missing at end of host
                     raise err
                 return pre[:-1]
 

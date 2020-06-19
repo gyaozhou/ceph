@@ -55,11 +55,7 @@ export class BootstrapCreateModalComponent implements OnDestroy, OnInit {
       this.createBootstrapForm.get('siteName').setValue(response.site_name);
     });
 
-    this.subs = this.rbdMirroringService.subscribeSummary((data: any) => {
-      if (!data) {
-        return;
-      }
-
+    this.subs = this.rbdMirroringService.subscribeSummary((data) => {
       const pools = data.content_data.pools;
       this.pools = pools.reduce((acc: any[], pool: Pool) => {
         acc.push({
@@ -152,6 +148,6 @@ export class BootstrapCreateModalComponent implements OnDestroy, OnInit {
       task: new FinishedTask('rbd/mirroring/bootstrap/create', {}),
       call: apiActionsObs
     });
-    taskObs.subscribe(undefined, finishHandler, finishHandler);
+    taskObs.subscribe({ error: finishHandler, complete: finishHandler });
   }
 }
