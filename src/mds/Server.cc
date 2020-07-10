@@ -1516,27 +1516,7 @@ void Server::infer_supported_features(Session *session, client_metadata_t& clien
 
 void Server::update_required_client_features()
 {
-  vector<size_t> bits = CEPHFS_FEATURES_MDS_REQUIRED;
-
-  /* If this blows up on you, you added a release without adding a new release bit to cephfs_features.h */
-  static_assert(CEPHFS_CURRENT_RELEASE == CEPH_RELEASE_MAX-1);
-
-  ceph_release_t min_compat = mds->mdsmap->get_min_compat_client();
-  if (min_compat >= ceph_release_t::octopus)
-    bits.push_back(CEPHFS_FEATURE_OCTOPUS);
-  else if (min_compat >= ceph_release_t::nautilus)
-    bits.push_back(CEPHFS_FEATURE_NAUTILUS);
-  else if (min_compat >= ceph_release_t::mimic)
-    bits.push_back(CEPHFS_FEATURE_MIMIC);
-  else if (min_compat >= ceph_release_t::luminous)
-    bits.push_back(CEPHFS_FEATURE_LUMINOUS);
-  else if (min_compat >= ceph_release_t::kraken)
-    bits.push_back(CEPHFS_FEATURE_KRAKEN);
-  else if (min_compat >= ceph_release_t::jewel)
-    bits.push_back(CEPHFS_FEATURE_JEWEL);
-
-  std::sort(bits.begin(), bits.end());
-  required_client_features = feature_bitset_t(bits);
+  required_client_features = mds->mdsmap->get_required_client_features();
   dout(7) << "required_client_features: " << required_client_features << dendl;
 
   if (mds->get_state() >= MDSMap::STATE_RECONNECT) {
@@ -5638,7 +5618,7 @@ void Server::handle_set_vxattr(MDRequestRef& mdr, CInode *cur)
 
     client_t exclude_ct = mdr->get_client();
     mdcache->broadcast_quota_to_client(cur, exclude_ct, true);
-  } else if (name.find("ceph.dir.pin") == 0) {
+  } else if (name == "ceph.dir.pin"sv) {
     if (!cur->is_dir() || cur->is_root()) {
       respond_to_request(mdr, -EINVAL);
       return;
@@ -5659,6 +5639,56 @@ void Server::handle_set_vxattr(MDRequestRef& mdr, CInode *cur)
 
     auto &pi = cur->project_inode();
     cur->set_export_pin(rank);
+    pip = &pi.inode;
+  } else if (name == "ceph.dir.pin.random"sv) {
+    if (!cur->is_dir() || cur->is_root()) {
+      respond_to_request(mdr, -EINVAL);
+      return;
+    }
+
+    double val;
+    try {
+      val = boost::lexical_cast<double>(value);
+    } catch (boost::bad_lexical_cast const&) {
+      dout(10) << "bad vxattr value, unable to parse float for " << name << dendl;
+      respond_to_request(mdr, -EINVAL);
+      return;
+    }
+
+    if (val < 0.0 || 1.0 < val) {
+      respond_to_request(mdr, -EDOM);
+      return;
+    } else if (mdcache->export_ephemeral_random_max < val) {
+      respond_to_request(mdr, -EINVAL);
+      return;
+    }
+
+    if (!xlock_policylock(mdr, cur))
+      return;
+
+    auto &pi = cur->project_inode();
+    cur->setxattr_ephemeral_rand(val);
+    pip = &pi.inode;
+  } else if (name == "ceph.dir.pin.distributed"sv) {
+    if (!cur->is_dir() || cur->is_root()) {
+      respond_to_request(mdr, -EINVAL);
+      return;
+    }
+
+    bool val;
+    try {
+      val = boost::lexical_cast<bool>(value);
+    } catch (boost::bad_lexical_cast const&) {
+      dout(10) << "bad vxattr value, unable to parse bool for " << name << dendl;
+      respond_to_request(mdr, -EINVAL);
+      return;
+    }
+
+    if (!xlock_policylock(mdr, cur))
+      return;
+
+    auto &pi = cur->project_inode();
+    cur->setxattr_ephemeral_dist(val);
     pip = &pi.inode;
   } else {
     dout(10) << " unknown vxattr " << name << dendl;
@@ -5964,8 +5994,13 @@ public:
     MDRequestRef null_ref;
     get_mds()->mdcache->send_dentry_link(dn, null_ref);
 
-    if (newi->inode.is_file())
+    if (newi->inode.is_file()) {
       get_mds()->locker->share_inode_max_size(newi);
+    } else if (newi->inode.is_dir()) {
+      // We do this now so that the linkages on the new directory are stable.
+      newi->maybe_ephemeral_dist();
+      newi->maybe_ephemeral_rand(true);
+    }
 
     // hit pop
     get_mds()->balancer->hit_inode(newi, META_POP_IWR);

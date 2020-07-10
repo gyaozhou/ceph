@@ -52,6 +52,10 @@
 #include "BlueFS.h"
 #include "common/EventTrace.h"
 
+#ifdef WITH_BLKIN
+#include "common/zipkin_trace.h"
+#endif
+
 class Allocator;
 class FreelistManager;
 class BlueStoreRepairer;
@@ -246,7 +250,7 @@ public:
       if (data.length()) {
 	ceph::buffer::list t;
 	t.substr_of(data, 0, newlen);
-	data.claim(t);
+	data = std::move(t);
       }
       length = newlen;
     }
@@ -1509,8 +1513,6 @@ public:
       STATE_DONE,
     } state_t;
 
-    state_t state = STATE_PREPARE;
-
     const char *get_state_name() {
       switch (state) {
       case STATE_PREPARE: return "prepare";
@@ -1545,6 +1547,18 @@ public:
       return "???";
     }
 #endif
+
+    inline void set_state(state_t s) {
+       state = s;
+#ifdef WITH_BLKIN
+       if (trace) {
+         trace.event(get_state_name());
+       } 
+#endif
+    }
+    inline state_t get_state() {
+      return state;
+    }
 
     CollectionRef ch;
     OpSequencerRef osr;  // this should be ch->osr
@@ -1582,6 +1596,10 @@ public:
     bool tracing = false;
 #endif
 
+#ifdef WITH_BLKIN
+    ZTracer::Trace trace;
+#endif
+
     explicit TransContext(CephContext* cct, Collection *c, OpSequencer *o,
 			  std::list<Context*> *on_commits)
       : ch(c),
@@ -1594,6 +1612,11 @@ public:
       }
     }
     ~TransContext() {
+#ifdef WITH_BLKIN
+      if (trace) {
+        trace.event("txc destruct");
+      }
+#endif
       delete deferred_txn;
     }
 
@@ -1620,6 +1643,8 @@ public:
     void aio_finish(BlueStore *store) override {
       store->txc_aio_finish(this);
     }
+  private:
+    state_t state = STATE_PREPARE;
   };
 
   class BlueStoreThrottle {
@@ -1823,7 +1848,7 @@ public:
       // caller must hold qlock & q.empty() must not empty
       ceph_assert(!q.empty());
       TransContext *txc = &q.back();
-      if (txc->state >= TransContext::STATE_KV_SUBMITTED) {
+      if (txc->get_state() >= TransContext::STATE_KV_SUBMITTED) {
 	return true;
       }
       return false;
@@ -1859,7 +1884,7 @@ public:
 	} else {
 	  auto it = q.rbegin();
 	  it++;
-	  if (it->state >= TransContext::STATE_KV_SUBMITTED) {
+	  if (it->get_state() >= TransContext::STATE_KV_SUBMITTED) {
 	    --kv_submitted_waiters;
 	    return;
           }
@@ -1875,7 +1900,7 @@ public:
 	return true;
       }
       TransContext *txc = &q.back();
-      if (txc->state >= TransContext::STATE_KV_DONE) {
+      if (txc->get_state() >= TransContext::STATE_KV_DONE) {
 	return true;
       }
       txc->oncommits.push_back(c);
@@ -2238,6 +2263,10 @@ private:
     void _resize_shards(bool interval_stats);
   } mempool_thread;
 
+#ifdef WITH_BLKIN
+  ZTracer::Endpoint trace_endpoint {"0.0.0.0", 0, "BlueStore"};
+#endif
+
   // --------------------------------------------------------
   // private methods
 
@@ -2311,6 +2340,20 @@ private:
   int _setup_block_symlink_or_file(std::string name, std::string path, uint64_t size,
 				   bool create);
 
+  // Functions related to zoned storage.
+
+  // For now, to avoid interface changes we piggyback zone_size (in MiB) and the
+  // first sequential zone number onto min_alloc_size and pass it to functions
+  // Allocator::create and FreelistManager::create.
+  uint64_t _piggyback_zoned_device_parameters_onto(uint64_t min_alloc_size) {
+    uint64_t zone_size = bdev->get_zone_size();
+    uint64_t zone_size_mb = zone_size / (1024 * 1024);
+    uint64_t first_seq_zone = bdev->get_conventional_region_size() / zone_size;
+    min_alloc_size |= (zone_size_mb << 32);
+    min_alloc_size |= (first_seq_zone << 48);
+    return min_alloc_size;
+  }
+
 public:
   utime_t get_deferred_last_submitted() {
     std::lock_guard l(deferred_lock);
@@ -2352,7 +2395,8 @@ private:
   friend void _dump_transaction(CephContext *cct, Transaction *t);
 
   TransContext *_txc_create(Collection *c, OpSequencer *osr,
-			    std::list<Context*> *on_commits);
+			    std::list<Context*> *on_commits,
+			    TrackedOpRef osd_op=TrackedOpRef());
   void _txc_update_store_statfs(TransContext *txc);
   void _txc_add_transaction(TransContext *txc, Transaction *t);
   void _txc_calc_cost(TransContext *txc);

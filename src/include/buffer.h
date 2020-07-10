@@ -1064,8 +1064,13 @@ struct error_code;
 
     void reserve(size_t prealloc);
 
-    void claim(list& bl);
+    [[deprecated("in favor of operator=(list&&)")]] void claim(list& bl) {
+      *this = std::move(bl);
+    }
     void claim_append(list& bl);
+    void claim_append(list&& bl) {
+      claim_append(bl);
+    }
     // only for bl is bufferlist::page_aligned_appender
     void claim_append_piecewise(list& bl);
 
@@ -1132,7 +1137,7 @@ struct error_code;
     void append_zero(unsigned len);
     void prepend_zero(unsigned len);
 
-    reserve_t obtain_contiguous_space(unsigned len);
+    reserve_t obtain_contiguous_space(const unsigned len);
 
     /*
      * get a char
