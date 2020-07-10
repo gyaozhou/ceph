@@ -665,7 +665,7 @@ public:
   }
 
   unsigned get_target_pg_log_entries() const;
-  
+
   // delayed pg activation
   void queue_for_recovery(PG *pg) {
     std::lock_guard l(recovery_lock);
@@ -725,7 +725,7 @@ public:
   void need_heartbeat_peer_update();
 
   void init();
-  void final_init();  
+  void final_init();
   void start_shutdown();
   void shutdown_reserver();
   void shutdown();
@@ -897,7 +897,7 @@ public:
 
   explicit OSDService(OSD *osd, ceph::async::io_context_pool& poolctx);
   ~OSDService() = default;
-};
+}; // zhou: class OSDService
 
 /*
 
@@ -1135,7 +1135,7 @@ protected:
 
 public:
   int get_nodeid() { return whoami; }
-  
+
   static ghobject_t get_osdmap_pobject_name(epoch_t epoch) {
     char foo[20];
     snprintf(foo, sizeof(foo), "osdmap.%d", epoch);
@@ -1167,7 +1167,7 @@ public:
     getline(ss, s);
     return ghobject_t(hobject_t(sobject_t(object_t(s.c_str()), 0)));
   }
-  
+
   static ghobject_t make_pg_biginfo_oid(spg_t pg) {
     std::stringstream ss;
     ss << "pginfo_" << pg;
@@ -1215,7 +1215,7 @@ public:
    * Return value: CompatSet of all supported features
    */
   static CompatSet get_osd_compat_set();
-  
+
 
 private:
   class C_Tick;
@@ -1439,7 +1439,7 @@ private:
   std::map<int, int> debug_heartbeat_drops_remaining;
   ceph::condition_variable heartbeat_cond;
   bool heartbeat_stop;
-  std::atomic<bool> heartbeat_need_update;   
+  std::atomic<bool> heartbeat_need_update;
   std::map<int,HeartbeatInfo> heartbeat_peers;  ///< map of osd id to HeartbeatInfo
   utime_t last_mon_heartbeat;
   Messenger *hb_front_client_messenger;
@@ -1525,13 +1525,13 @@ public:
 private:
   // -- waiters --
   std::list<OpRequestRef> finished;
-  
+
   void take_waiters(std::list<OpRequestRef>& ls) {
     ceph_assert(ceph_mutex_is_locked(osd_lock));
     finished.splice(finished.end(), ls);
   }
   void do_waiters();
-  
+
   // -- op tracking --
   OpTracker op_tracker;
   void test_ops(std::string command, std::string args, std::ostream& ss);
@@ -1819,7 +1819,7 @@ protected:
   bool _is_healthy();
 
   void send_full_update();
-  
+
   friend struct CB_OSD_GetVersion;
 
   // -- alive --
@@ -2045,7 +2045,7 @@ public:
 		       uuid_d *osd_fsid,
 		       int *whoami,
 		       ceph_release_t *min_osd_release);
-  
+
 
   // startup/shutdown
   int pre_init();

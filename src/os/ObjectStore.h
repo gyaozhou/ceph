@@ -59,6 +59,7 @@ typedef uint32_t osflagbits_t;
 const int SKIP_JOURNAL_REPLAY = 1 << 0;
 const int SKIP_MOUNT_OMAP = 1 << 1;
 
+// zhou: README,
 class ObjectStore {
 protected:
   std::string path;
@@ -150,7 +151,8 @@ public:
     CollectionImpl() = delete;
     CollectionImpl(CephContext* cct, const coll_t& c) : RefCountedObject(cct), cid(c) {}
     ~CollectionImpl() = default;
-  };
+  }; // zhou: struct CollectionImpl : public RefCountedObject
+
   using CollectionHandle = ceph::ref_t<CollectionImpl>;
 
 

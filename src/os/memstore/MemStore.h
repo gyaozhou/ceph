@@ -398,7 +398,7 @@ public:
     std::vector<Transaction>& tls,
     TrackedOpRef op = TrackedOpRef(),
     ThreadPool::TPHandle *handle = NULL) override;
-};
+}; // zhou: class MemStore
 
 
 

@@ -21,6 +21,7 @@
 #include "common/RWLock.h"
 #include "osd/OpRequest.h"
 
+// zhou: README,
 class JournalingObjectStore : public ObjectStore {
 protected:
   Journal *journal;
@@ -46,7 +47,7 @@ protected:
     uint64_t get_op_seq() {
       return op_seq;
     }
-  } submit_manager;
+  } submit_manager; // zhou: class SubmitManager
 
   class ApplyManager {
     CephContext* cct;
@@ -106,7 +107,7 @@ protected:
 	max_applied_seq = fs_op_seq;
       }
     }
-  } apply_manager;
+  } apply_manager; // zhou: class ApplyManager
 
   bool replaying;
 
@@ -140,6 +141,6 @@ public:
 
   ~JournalingObjectStore() override {
   }
-};
+}; // zhou: class JournalingObjectStore
 
 #endif
