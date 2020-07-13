@@ -595,7 +595,8 @@ public:
       }
     }
   }
-};
+}; // zhou: class PGTransaction
+
 using PGTransactionUPtr = std::unique_ptr<PGTransaction>;
 
 #endif

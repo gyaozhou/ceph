@@ -3918,6 +3918,7 @@ std::vector<Option> get_global_options() {
     .add_see_also("bluestore_debug_omit_block_device_write")
     .set_description("write metadata only"),
 
+    // zhou: ???
     Option("objectstore_blackhole", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
     .set_description(""),
@@ -4416,6 +4417,7 @@ std::vector<Option> get_global_options() {
     .set_default(32)
     .set_description("Max transactions with deferred writes that can accumulate before we force flush deferred writes"),
 
+    // zhou:
     Option("bluestore_max_defer_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(3)
     .set_description("max duration to force deferred submit"),
@@ -5596,7 +5598,7 @@ std::vector<Option> get_rgw_options() {
     .set_long_description(
         "This is needed for virtual hosting of buckets, unless configured via zonegroup "
         "configuration."),
-    
+
     Option("rgw_numa_node", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(-1)
     .set_flag(Option::FLAG_STARTUP)
@@ -8311,7 +8313,7 @@ std::vector<Option> get_mds_options() {
     .set_default(false)
     .set_flag(Option::FLAG_RUNTIME)
     .set_description("always process op on auth mds"),
-    
+
     Option("mds_damage_table_max_entries", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10000)
     .set_description("maximum number of damage table entries"),

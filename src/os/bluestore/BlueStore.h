@@ -165,6 +165,7 @@ public:
   void _set_compression();
   void _set_throttle_params();
   int _set_cache_sizes();
+  // zhou: "max duration to force deferred submit",
   void _set_max_defer_interval() {
     max_defer_interval =
 	cct->_conf.get_val<double>("bluestore_max_defer_interval");
@@ -269,7 +270,7 @@ public:
       f->dump_unsigned("length", length);
       f->dump_unsigned("data_length", data.length());
     }
-  };
+  }; // zhou: struct Buffer {}
 
   struct BufferCacheShard;
 
@@ -402,7 +403,7 @@ public:
       }
       f->close_section();
     }
-  };
+  }; // zhou: struct BufferSpace {}
 
   struct SharedBlobSet;
 
@@ -465,7 +466,7 @@ public:
       return loaded;
     }
 
-  };
+  }; // zhou: struct SharedBlob {}
   typedef boost::intrusive_ptr<SharedBlob> SharedBlobRef;
 
   /// a lookup table of SharedBlobs
@@ -515,7 +516,7 @@ public:
 
     template <int LogLevelV>
     void dump(CephContext *cct);
-  };
+  }; // zhou: struct SharedBlobSet {}
 
 //#define CACHE_BLOB_BL  // not sure if this is a win yet or not... :/
 
@@ -688,12 +689,15 @@ public:
       uint64_t* sbid,
       bool include_ref_map);
 #endif
-  };
+  }; // zhou: struct Blob {}
+
   typedef boost::intrusive_ptr<Blob> BlobRef;
   typedef mempool::bluestore_cache_other::map<int,BlobRef> blob_map_t;
 
   /// a logical extent, pointing to (some portion of) a blob
   typedef boost::intrusive::set_base_hook<boost::intrusive::optimize_size<true> > ExtentBase; //making an alias to avoid build warnings
+
+  // zhou: logical address space
   struct Extent : public ExtentBase {
     MEMPOOL_CLASS_HELPERS();
 
@@ -755,7 +759,8 @@ public:
     bool blob_escapes_range(uint32_t o, uint32_t l) const {
       return blob_start() < o || blob_end() > o + l;
     }
-  };
+  }; // zhou: struct Extent {}
+
   typedef boost::intrusive::set<Extent> extent_map_t;
 
 
@@ -785,9 +790,11 @@ public:
 
   struct Onode;
 
+  // zhou: an object may contains several struct Extent.
   /// a sharded extent map, mapping offsets to lextents to blobs
   struct ExtentMap {
     Onode *onode;
+
     extent_map_t extent_map;        ///< map of Extents to Blobs
     blob_map_t spanning_blob_map;   ///< blobs that span shards
     typedef boost::intrusive_ptr<Onode> OnodeRef;
@@ -948,7 +955,7 @@ public:
 
     /// split a blob (and referring extents)
     BlobRef split_blob(BlobRef lb, uint32_t blob_offset, uint32_t pos);
-  };
+  }; // zhou: struct ExtentMap {}
 
   /// Compressed Blob Garbage collector
   /*
@@ -1057,6 +1064,8 @@ public:
 
   struct OnodeSpace;
   struct OnodeCacheShard;
+
+  // zhou: object in memory
   /// an in-memory object
   struct Onode {
     MEMPOOL_CLASS_HELPERS();
@@ -1073,6 +1082,7 @@ public:
 
     boost::intrusive::list_member_hook<> lru_item, pin_item;
 
+    // zhou: object on disk
     bluestore_onode_t onode;  ///< metadata stored as value in kv store
     bool exists;              ///< true if object logically exists
 
@@ -1148,6 +1158,7 @@ public:
     void get_omap_tail(std::string *out);
     void decode_omap_key(const std::string& key, std::string *user_key);
   };
+
   typedef boost::intrusive_ptr<Onode> OnodeRef;
 
   /// A generic Cache Shard
@@ -1312,10 +1323,12 @@ public:
   class OpSequencer;
   using OpSequencerRef = ceph::ref_t<OpSequencer>;
 
+  // zhou: PG in memory metadata
   struct Collection : public CollectionImpl {
     BlueStore *store;
     OpSequencerRef osr;
     BufferCacheShard *cache;       ///< our cache shard
+    // zhou: PG on disk?
     bluestore_cnode_t cnode;
     ceph::shared_mutex lock =
       ceph::make_shared_mutex("BlueStore::Collection::lock", true, false);
@@ -1553,7 +1566,7 @@ public:
 #ifdef WITH_BLKIN
        if (trace) {
          trace.event(get_state_name());
-       } 
+       }
 #endif
     }
     inline state_t get_state() {
@@ -1620,6 +1633,7 @@ public:
       delete deferred_txn;
     }
 
+    // zhou:
     void write_onode(OnodeRef &o) {
       onodes.insert(o);
     }
@@ -3151,6 +3165,7 @@ private:
     BigDeferredWriteContext& dctx,
     bufferlist::iterator& blp,
     WriteContext* wctx);
+
   void _do_write_big(
     TransContext *txc,
     CollectionRef &c,
@@ -3170,6 +3185,7 @@ private:
     WriteContext *wctx,
     std::set<SharedBlob*> *maybe_unshared_blobs=0);
 
+  // zhou:
   int _write(TransContext *txc,
 	     CollectionRef& c,
 	     OnodeRef& o,
@@ -3310,6 +3326,7 @@ private:
   void _collect_allocation_stats(uint64_t need, uint32_t alloc_size,
                                  size_t extents);
   void _record_allocation_stats();
+
 private:
   uint64_t probe_count = 0;
   std::atomic<uint64_t> alloc_stats_count = {0};

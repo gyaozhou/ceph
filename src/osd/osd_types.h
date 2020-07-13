@@ -5540,8 +5540,7 @@ struct object_manifest_t {
 WRITE_CLASS_ENCODER(object_manifest_t)
 std::ostream& operator<<(std::ostream& out, const object_manifest_t& oi);
 
-// zhou: object basic info, used in disk. corresponding memeory version
-//       "struct ObjectState".
+// zhou: object metadata on disk. It's in memeory struct is "struct ObjectState".
 struct object_info_t {
   hobject_t soid;
   eversion_t version, prior_version;
@@ -5707,7 +5706,8 @@ struct object_info_t {
   explicit object_info_t(ceph::buffer::list& bl) {
     decode(bl);
   }
-};
+}; // zhou: struct object_info_t {}
+
 WRITE_CLASS_ENCODER_FEATURES(object_info_t)
 
 std::ostream& operator<<(std::ostream& out, const object_info_t& oi);

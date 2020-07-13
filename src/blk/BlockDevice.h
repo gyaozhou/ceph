@@ -39,10 +39,16 @@
 #define SPDK_PREFIX "spdk:"
 
 #if defined(__linux__)
+
 #if !defined(F_SET_FILE_RW_HINT)
 #define F_LINUX_SPECIFIC_BASE 1024
 #define F_SET_FILE_RW_HINT         (F_LINUX_SPECIFIC_BASE + 14)
 #endif
+
+// zhou: refer to https://lwn.net/Articles/726477/
+//       In order to support NVMe feature, application use this flag to indicate
+//       the possibility of the data will be overwrite in short time or not.
+
 // These values match Linux definition
 // https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/fcntl.h#n56
 #define  WRITE_LIFE_NOT_SET  	0 	// No hint information set
@@ -53,7 +59,7 @@
 #define  WRITE_LIFE_EXTREME  	5     	// Data written has an extremely long life time
 #define  WRITE_LIFE_MAX  	6
 #else
-// On systems don't have WRITE_LIFE_* only use one FD 
+// On systems don't have WRITE_LIFE_* only use one FD
 // And all files are created equal
 #define  WRITE_LIFE_NOT_SET  	0 	// No hint information set
 #define  WRITE_LIFE_NONE  	0       // No hints about write life time
@@ -125,9 +131,12 @@ public:
   int get_return_value() const {
     return r;
   }
-};
+}; // zhou: struct IOContext
 
 
+
+// zhou: Interface all kinds block devices,
+//       e.g. kernel block device/PMEM/NVMe/SMR HDD/...
 class BlockDevice {
 public:
   CephContext* cct;
@@ -138,8 +147,11 @@ private:
   std::atomic_int ioc_reap_count = {0};
 
 protected:
+  // zhou: volume size
   uint64_t size = 0;
+  // zhou: block size
   uint64_t block_size = 0;
+
   bool support_discard = false;
   bool rotational = true;
   bool lock_exclusive = true;
@@ -164,8 +176,10 @@ public:
  {}
   virtual ~BlockDevice() = default;
 
+  // zhou: object factory
   static BlockDevice *create(
     CephContext* cct, const std::string& path, aio_callback_t cb, void *cbpriv, aio_callback_t d_cb, void *d_cbpriv);
+
   virtual bool supported_bdev_label() { return true; }
   virtual bool is_rotational() { return rotational; }
 
@@ -180,12 +194,13 @@ public:
     return conventional_region_size;
   }
 
+
   virtual void aio_submit(IOContext *ioc) = 0;
 
   void set_no_exclusive_lock() {
     lock_exclusive = false;
   }
-  
+
   uint64_t get_size() const { return size; }
   uint64_t get_block_size() const { return block_size; }
 
@@ -259,6 +274,6 @@ protected:
             off < size &&
             off + len <= size);
   }
-};
+}; // zhou: class BlockDevice
 
 #endif //CEPH_BLK_BLOCKDEVICE_H

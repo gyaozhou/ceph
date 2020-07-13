@@ -27,9 +27,12 @@
 
 #define RW_IO_MAX (INT_MAX & CEPH_PAGE_MASK)
 
-
+// zhou: used for /dev/sda or a /home/file
 class KernelDevice : public BlockDevice {
+  // zhou: differrent fd owns different write hint.
+  //       For example, WAL in BlueFS will always be overwriten.
   std::vector<int> fd_directs, fd_buffereds;
+
   bool enable_wrt = true;
   std::string path;
   bool aio, dio;
@@ -45,7 +48,9 @@ class KernelDevice : public BlockDevice {
   std::atomic<bool> io_since_flush = {false};
   ceph::mutex flush_mutex = ceph::make_mutex("KernelDevice::flush_mutex");
 
+  // zhou:
   std::unique_ptr<io_queue_t> io_queue;
+
   aio_callback_t discard_callback;
   void *discard_callback_priv;
   bool aio_stop;
@@ -58,6 +63,7 @@ class KernelDevice : public BlockDevice {
   interval_set<uint64_t> discard_queued;
   interval_set<uint64_t> discard_finishing;
 
+  // zhou: aio completion handler thread
   struct AioCompletionThread : public Thread {
     KernelDevice *bdev;
     explicit AioCompletionThread(KernelDevice *b) : bdev(b) {}
@@ -67,6 +73,7 @@ class KernelDevice : public BlockDevice {
     }
   } aio_thread;
 
+  // zhou: just add context "bdev"
   struct DiscardThread : public Thread {
     KernelDevice *bdev;
     explicit DiscardThread(KernelDevice *b) : bdev(b) {}
@@ -145,6 +152,6 @@ public:
   int invalidate_cache(uint64_t off, uint64_t len) override;
   int open(const std::string& path) override;
   void close() override;
-};
+}; // zhou: class KernelDevice
 
 #endif

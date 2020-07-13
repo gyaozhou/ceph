@@ -27,6 +27,7 @@ class Connection;
 class CryptoKey;
 class KeyStore;
 
+// zhou: README,
 class Dispatcher {
 public:
   explicit Dispatcher(CephContext *cct_)
@@ -223,6 +224,6 @@ protected:
 private:
   explicit Dispatcher(const Dispatcher &rhs);
   Dispatcher& operator=(const Dispatcher &rhs);
-};
+}; // zhou: class Dispatcher
 
 #endif

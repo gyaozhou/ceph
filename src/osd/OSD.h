@@ -102,6 +102,7 @@ class MMonGetPurgedSnapsReply;
 
 class OSD;
 
+// zhou: README,
 class OSDService {
   using OpSchedulerItem = ceph::osd::scheduler::OpSchedulerItem;
 public:
@@ -109,6 +110,7 @@ public:
   CephContext *cct;
   ObjectStore::CollectionHandle meta_ch;
   const int whoami;
+  // zhou: which ObjectStore, BlueStore/FileStore/...
   ObjectStore *&store;
   LogClient &log_client;
   LogChannelRef clog;
@@ -1058,8 +1060,10 @@ struct OSDShard {
     int id,
     CephContext *cct,
     OSD *osd);
-};
+}; // zhou: struct OSDShard {}
 
+
+// zhou: README,
 class OSD : public Dispatcher,
 	    public md_config_obs_t {
   using OpSchedulerItem = ceph::osd::scheduler::OpSchedulerItem;
@@ -2074,7 +2078,7 @@ private:
   ceph::mutex m_perf_queries_lock = ceph::make_mutex("OSD::m_perf_queries_lock");
   std::list<OSDPerfMetricQuery> m_perf_queries;
   std::map<OSDPerfMetricQuery, OSDPerfMetricLimits> m_perf_limits;
-};
+};  // zhou: class OSD
 
 
 //compatibility of the executable

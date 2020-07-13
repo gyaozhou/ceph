@@ -92,10 +92,15 @@ void IOContext::release_running_aios()
 #endif
 }
 
+// zhou: create different derived class, used by BlueFS.cc/BlueStore.cc
+//       "cbpriv", BlueStore/NULL;
+//       "d_cbpriv", BlueStore/BlueFS;
 BlockDevice *BlockDevice::create(CephContext* cct, const string& path,
 				 aio_callback_t cb, void *cbpriv, aio_callback_t d_cb, void *d_cbpriv)
 {
   string type = "kernel";
+
+  // zhou: SPDK owned NVMe drive.
   char buf[PATH_MAX + 1];
   int r = ::readlink(path.c_str(), buf, sizeof(buf) - 1);
   if (r >= 0) {
@@ -129,7 +134,10 @@ BlockDevice *BlockDevice::create(CephContext* cct, const string& path,
     return new PMEMDevice(cct, cb, cbpriv);
   }
 #endif
+
 #if defined(HAVE_LIBAIO) || defined(HAVE_POSIXAIO)
+
+  // zhou: SMR HDD
 #if defined(HAVE_LIBZBC)
   r = zbc_device_is_zoned(path.c_str(), false, nullptr);
   if (r == 1) {
@@ -141,10 +149,13 @@ BlockDevice *BlockDevice::create(CephContext* cct, const string& path,
     goto out_fail;
   }
 #endif
+
+  // zhou: kernel based block device
   if (type == "kernel") {
     return new KernelDevice(cct, cb, cbpriv, d_cb, d_cbpriv);
   }
 #endif
+
 #ifndef WITH_SEASTAR
 #if defined(HAVE_SPDK)
   if (type == "ust-nvme") {

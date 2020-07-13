@@ -65,6 +65,7 @@ struct Interceptor {
 
 #endif
 
+// zhou: README,
 class Messenger {
 private:
   std::deque<Dispatcher*> dispatchers;
@@ -808,7 +809,7 @@ public:
   /**
    * @} // Dispatcher Interfacing
    */
-};
+}; // zhou: class Messenger
 
 
 

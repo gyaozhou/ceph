@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 /*
  * Ceph - scalable distributed file system
  *
@@ -9,9 +9,9 @@
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software 
+ * License version 2.1, as published by the Free Software
  * Foundation.  See file COPYING.
- * 
+ *
  */
 
 #ifndef CEPH_REPLICATEDPG_H
@@ -55,6 +55,7 @@ void put_with_id(PrimaryLogPG *pg, uint64_t id);
 
 struct inconsistent_snapset_wrapper;
 
+// zhou: README,
 class PrimaryLogPG : public PG, public PGBackend::Listener {
   friend class OSD;
   friend class Watch;
@@ -158,7 +159,7 @@ public:
     uint64_t start_offset = 0;
     uint64_t last_offset = 0;
     std::vector<OSDOp> chunk_ops;
-  
+
     CopyOp(CopyCallback *cb_, ObjectContextRef _obc, hobject_t s,
 	   object_locator_t l,
            version_t v,
@@ -245,8 +246,8 @@ public:
     bool removal;               ///< we are removing the backend object
     std::optional<std::function<void()>> on_flush; ///< callback, may be null
     // for chunked object
-    std::map<uint64_t, int> io_results; 
-    std::map<uint64_t, ceph_tid_t> io_tids; 
+    std::map<uint64_t, int> io_results;
+    std::map<uint64_t, ceph_tid_t> io_tids;
     uint64_t chunks;
 
     FlushOp()
@@ -328,7 +329,7 @@ public:
     GenContext<ThreadPool::TPHandle&> *c) override;
   GenContext<ThreadPool::TPHandle&> *bless_unlocked_gencontext(
     GenContext<ThreadPool::TPHandle&> *c) override;
-    
+
   void send_message(int to_osd, Message *m) override {
     osd->send_message_osd_cluster(to_osd, m, get_osdmap_epoch());
   }
@@ -336,10 +337,15 @@ public:
 			 OpRequestRef op) override {
     osd->store->queue_transaction(ch, std::move(t), op);
   }
+
+  // zhou: derived from class PGBackend::Listener::queue_transactions()
   void queue_transactions(std::vector<ObjectStore::Transaction>& tls,
 			  OpRequestRef op) override {
+    // zhou: derived from PG.osd,
+    //       ObjectStore::queue_transaction(), e.g. BlueStore::queue_transactions()
     osd->store->queue_transactions(ch, tls, op, NULL);
   }
+
   epoch_t get_interval_start_epoch() const override {
     return info.history.same_interval_since;
   }
@@ -371,7 +377,7 @@ public:
   const std::map<pg_shard_t, pg_info_t> &get_shard_info() const override {
     return recovery_state.get_peer_info();
   }
-  using PGBackend::Listener::get_shard_info;  
+  using PGBackend::Listener::get_shard_info;
   const pg_missing_tracker_t &get_local_missing() const override {
     return recovery_state.get_pg_log().get_missing();
   }
@@ -496,7 +502,7 @@ public:
   bool pg_is_undersized() const override {
     return is_undersized();
   }
-  
+
   bool pg_is_repair() const override {
     return is_repair();
   }
@@ -761,7 +767,8 @@ public:
       }
       return -1ull;
     }
-  };
+  }; // zhou: struct OpContext {}
+
   using OpContextUPtr = std::unique_ptr<OpContext>;
   friend struct OpContext;
 
@@ -782,9 +789,9 @@ public:
 
     bool rep_aborted;
     bool all_committed;
-    
+
     utime_t   start;
-    
+
     eversion_t          pg_local_last_complete;
 
     ObcLockManager lock_manager;
@@ -792,7 +799,7 @@ public:
     std::list<std::function<void()>> on_committed;
     std::list<std::function<void()>> on_success;
     std::list<std::function<void()>> on_finish;
-    
+
     RepGather(
       OpContext *c, ceph_tid_t rt,
       eversion_t lc) :
@@ -800,7 +807,7 @@ public:
       op(c->op),
       queue_item(this),
       nref(1),
-      rep_tid(rt), 
+      rep_tid(rt),
       rep_aborted(false),
       all_committed(false),
       pg_local_last_complete(lc),
@@ -841,7 +848,7 @@ public:
 	//generic_dout(0) << "deleting " << this << dendl;
       }
     }
-  };
+  }; // zhou: class RepGather
 
 
 protected:
@@ -1294,7 +1301,7 @@ protected:
   int prepare_transaction(OpContext *ctx);
   std::list<std::pair<OpRequestRef, OpContext*> > in_progress_async_reads;
   void complete_read_ctx(int result, OpContext *ctx);
-  
+
   // pg on-disk content
   void check_local() override;
 
@@ -1476,7 +1483,7 @@ protected:
   friend struct C_ProxyWrite_Commit;
 
   // -- chunkop --
-  void do_proxy_chunked_op(OpRequestRef op, const hobject_t& missing_oid, 
+  void do_proxy_chunked_op(OpRequestRef op, const hobject_t& missing_oid,
 			   ObjectContextRef obc, bool write_ordered);
   void do_proxy_chunked_read(OpRequestRef op, ObjectContextRef obc, int op_index,
 			     uint64_t chunk_index, uint64_t req_offset, uint64_t req_length,
@@ -1490,7 +1497,7 @@ protected:
 			uint64_t start_offset, bool block);
   int start_manifest_flush(OpRequestRef op, ObjectContextRef obc, bool blocking,
 			   std::optional<std::function<void()>> &&on_flush);
-  void finish_manifest_flush(hobject_t oid, ceph_tid_t tid, int r, ObjectContextRef obc, 
+  void finish_manifest_flush(hobject_t oid, ceph_tid_t tid, int r, ObjectContextRef obc,
 			     uint64_t last_offset);
   void handle_manifest_flush(hobject_t oid, ceph_tid_t tid, int r,
 			     uint64_t offset, uint64_t last_offset, epoch_t lpr);
@@ -1978,13 +1985,13 @@ public:
 
 private:
   DynamicPerfStats m_dynamic_perf_stats;
-};
+}; // zhou: class PrimaryLogPG
 
 inline ostream& operator<<(ostream& out, const PrimaryLogPG::RepGather& repop)
 {
   out << "repgather(" << &repop
       << " " << repop.v
-      << " rep_tid=" << repop.rep_tid 
+      << " rep_tid=" << repop.rep_tid
       << " committed?=" << repop.all_committed
       << " r=" << repop.r
       << ")";

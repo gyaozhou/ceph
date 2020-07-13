@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+/ -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -1647,7 +1647,7 @@ void PrimaryLogPG::handle_backoff(OpRequestRef& op)
   session->ack_backoff(cct, m->pgid, m->id, begin, end);
 }
 
-// zhou: README,
+// zhou: README, according to PG state, handle different messages.
 void PrimaryLogPG::do_request(
   OpRequestRef& op,
   ThreadPool::TPHandle &handle)
@@ -1828,7 +1828,8 @@ void PrimaryLogPG::do_request(
  * pg lock will be held (if multithreaded)
  * osd_lock NOT held.
  */
-// zhou: README,
+// zhou: README, check object and its head/snap/clone state,
+//       get context, ObjectContext, OPContext ???
 void PrimaryLogPG::do_op(OpRequestRef& op)
 {
   FUNCTRACE(cct);
@@ -2154,6 +2155,7 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
     }
   }
 
+  // zhou:
   int r = find_object_context(
     oid, &obc, can_create,
     m->has_flag(CEPH_OSD_FLAG_MAP_SNAP_CLONE),
@@ -2334,6 +2336,7 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
 
   op->mark_started();
 
+  // zhou:
   execute_ctx(ctx);
   utime_t prepare_latency = ceph_clock_now();
   prepare_latency -= op->get_dequeued_time();
@@ -3847,6 +3850,7 @@ void PrimaryLogPG::promote_object(ObjectContextRef obc,
     });
 }
 
+// zhou: README,
 void PrimaryLogPG::execute_ctx(OpContext *ctx)
 {
   FUNCTRACE(cct);
@@ -4058,8 +4062,11 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
 
   RepGather *repop = new_repop(ctx, obc, rep_tid);
 
+  // zhou: send request to replica
   issue_repop(repop, ctx);
+  // zhou: evaluate sending result.
   eval_repop(repop);
+
   repop->put();
 }
 
@@ -10568,6 +10575,7 @@ void PrimaryLogPG::eval_repop(RepGather *repop)
   }
 }
 
+// zhou: README,
 void PrimaryLogPG::issue_repop(RepGather *repop, OpContext *ctx)
 {
   FUNCTRACE(cct);
@@ -10599,6 +10607,8 @@ void PrimaryLogPG::issue_repop(RepGather *repop, OpContext *ctx)
     soid,
     ctx->log,
     ctx->at_version);
+
+  // zhou: class ReplicatedBackend / class ECBackend
   pgbackend->submit_transaction(
     soid,
     ctx->delta_stats,

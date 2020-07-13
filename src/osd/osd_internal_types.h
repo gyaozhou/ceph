@@ -28,6 +28,7 @@ struct SnapSetContext {
 struct ObjectContext;
 typedef std::shared_ptr<ObjectContext> ObjectContextRef;
 
+// zhou:
 struct ObjectContext {
   ObjectState obs;
 
@@ -183,7 +184,7 @@ public:
   bool blocked:1;
   bool requeue_scrub_on_unblock:1;    // true if we need to requeue scrub on unblock
 
-};
+}; // zhou: struct ObjectContext {}
 
 inline std::ostream& operator<<(std::ostream& out, const ObjectState& obs)
 {

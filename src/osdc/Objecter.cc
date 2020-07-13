@@ -651,7 +651,7 @@ bs::error_code Objecter::_normalize_watch_error(bs::error_code ec)
 
 void Objecter::_linger_reconnect(LingerOp *info, bs::error_code ec)
 {
-  ldout(cct, 10) << __func__ << " " << info->linger_id << " = " << ec 
+  ldout(cct, 10) << __func__ << " " << info->linger_id << " = " << ec
 		 << " (last_error " << info->last_error << ")" << dendl;
   if (ec) {
     std::unique_lock wl(info->watch_lock);
@@ -2180,7 +2180,7 @@ void Objecter::resend_mon_ops()
 }
 
 // read | write ---------------------------
-
+// zhou: README, send out IO request via network.
 void Objecter::op_submit(Op *op, ceph_tid_t *ptid, int *ctx_budget)
 {
   shunique_lock rl(rwlock, ceph::acquire_shared);

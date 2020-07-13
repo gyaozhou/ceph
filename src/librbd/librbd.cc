@@ -666,10 +666,12 @@ namespace librbd {
     return 0;
   }
 
+  // zhou: README,
   int RBD::create(IoCtx& io_ctx, const char *name, uint64_t size, int *order)
   {
     TracepointProvider::initialize<tracepoint_traits>(get_cct(io_ctx));
     tracepoint(librbd, create_enter, io_ctx.get_pool_name().c_str(), io_ctx.get_id(), name, size, *order);
+    // zhou: defined in "internal.cc"
     int r = librbd::create(io_ctx, name, size, order);
     tracepoint(librbd, create_exit, r, *order);
     return r;
@@ -2433,6 +2435,7 @@ namespace librbd {
     return librbd::api::Snapshot<>::get_id(ictx, snap_name, snap_id);
   }
 
+// zhou: README,
   ssize_t Image::read(uint64_t ofs, size_t len, bufferlist& bl)
   {
     ImageCtx *ictx = (ImageCtx *)ctx;
@@ -2518,6 +2521,7 @@ namespace librbd {
     return r;
   }
 
+  // zhou: README,
   ssize_t Image::write(uint64_t ofs, size_t len, bufferlist& bl)
   {
     ImageCtx *ictx = (ImageCtx *)ctx;
@@ -2616,6 +2620,7 @@ namespace librbd {
     return r;
   }
 
+  // zhou: README,
   int Image::aio_write(uint64_t off, size_t len, bufferlist& bl,
 		       RBD::AioCompletion *c)
   {
@@ -2649,6 +2654,7 @@ namespace librbd {
     return 0;
   }
 
+  // zhou: README,
   int Image::aio_read(uint64_t off, size_t len, bufferlist& bl,
 		      RBD::AioCompletion *c)
   {

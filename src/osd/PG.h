@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -7,9 +7,9 @@
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software 
+ * License version 2.1, as published by the Free Software
  * Foundation.  See file COPYING.
- * 
+ *
  */
 
 #ifndef CEPH_PG_H
@@ -20,7 +20,7 @@
 #include "include/mempool.h"
 
 // re-include our assert to clobber boost's
-#include "include/ceph_assert.h" 
+#include "include/ceph_assert.h"
 #include "include/common_fwd.h"
 
 #include "include/types.h"
@@ -75,6 +75,7 @@ namespace Scrub {
   void put_with_id(PG *pg, uint64_t id);
   typedef TrackedIntPtr<PG> PGRef;
 #else
+  // zhou: normal path
   typedef boost::intrusive_ptr<PG> PGRef;
 #endif
 
@@ -154,12 +155,12 @@ class PGRecoveryStats {
     i.events += events;
     i.event_time += event_dur;
   }
-};
+}; // zhou: class PGRecoveryStats
 
 /** PG - Replica Placement Group
  *
  */
-
+// zhou: README,
 class PG : public DoutPrefixProvider, public PeeringState::PeeringListener {
   friend struct NamedState;
   friend class PeeringState;
@@ -584,6 +585,7 @@ public:
 protected:
   // -------------
   // protected
+  // zhou:
   OSDService *osd;
 public:
   OSDShard *osd_shard = nullptr;
@@ -1017,7 +1019,7 @@ protected:
       pg->get_pgbackend()->trim(entry, t);
     }
   };
-  
+
   void update_object_snap_mapping(
     ObjectStore::Transaction *t, const hobject_t &soid,
     const std::set<snapid_t> &snaps);
@@ -1026,7 +1028,7 @@ protected:
   void remove_snap_mapped_object(
     ObjectStore::Transaction& t, const hobject_t& soid);
 
-  bool have_unfound() const { 
+  bool have_unfound() const {
     return recovery_state.have_unfound();
   }
   uint64_t get_num_unfound() const {
@@ -1507,7 +1509,7 @@ protected:
 
   // ref to recovery_state.info
   const pg_info_t &info;
-};
+}; // zhou: class PG
 
 
 ostream& operator<<(ostream& out, const PG::BackfillInterval& bi);

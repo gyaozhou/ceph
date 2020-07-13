@@ -18,11 +18,15 @@
 #include "PGBackend.h"
 
 struct C_ReplicatedBackend_OnPullComplete;
+
+// zhou: README, multiply replicas over backend storage
 class ReplicatedBackend : public PGBackend {
+
   struct RPGHandle : public PGBackend::RecoveryHandle {
     std::map<pg_shard_t, std::vector<PushOp> > pushes;
     std::map<pg_shard_t, std::vector<PullOp> > pulls;
   };
+
   friend struct C_ReplicatedBackend_OnPullComplete;
 public:
   ReplicatedBackend(
@@ -414,7 +418,7 @@ private:
     epoch_t epoch_started;
 
     ObjectStore::Transaction opt, localt;
-    
+
     RepModify() : committed(false), ackerosd(-1),
 		  epoch_started(0) {}
   };

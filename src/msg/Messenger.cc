@@ -33,6 +33,7 @@ uint64_t Messenger::get_random_nonce()
   return ceph::util::generate_random_number<uint64_t>();
 }
 
+// zhou: README,
 Messenger *Messenger::create(CephContext *cct, const std::string &type,
 			     entity_name_t name, std::string lname,
 			     uint64_t nonce, uint64_t cflags)
@@ -111,4 +112,3 @@ int Messenger::bindv(const entity_addrvec_t& addrs)
 {
   return bind(addrs.legacy_addr());
 }
-

@@ -104,6 +104,7 @@ void decode_str_set_to_bl(ceph::buffer::list::const_iterator& p, ceph::buffer::l
  *
  */
 namespace ceph::os {
+// zhou:
 class Transaction {
 public:
   enum {

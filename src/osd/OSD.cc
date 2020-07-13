@@ -4539,6 +4539,7 @@ PG* OSD::_make_pg(
   PG *pg;
   if (pi.type == pg_pool_t::TYPE_REPLICATED ||
       pi.type == pg_pool_t::TYPE_ERASURE)
+    // zhou:
     pg = new PrimaryLogPG(&service, createmap, pool, ec_profile, pgid);
   else
     ceph_abort();
@@ -6988,15 +6989,18 @@ void OSDService::maybe_share_map(
   session->sent_epoch_lock.unlock();
 }
 
+// zhou: README, processing "waiting_on_map", check OSD map, then "enqueue_op()"
 void OSD::dispatch_session_waiting(const ceph::ref_t<Session>& session, OSDMapRef osdmap)
 {
   ceph_assert(ceph_mutex_is_locked(session->session_dispatch_lock));
 
   auto i = session->waiting_on_map.begin();
+
   while (i != session->waiting_on_map.end()) {
     OpRequestRef op = &(*i);
     ceph_assert(ms_can_fast_dispatch(op->get_req()));
     auto m = op->get_req<MOSDFastDispatchOp>();
+
     if (m->get_min_epoch() > osdmap->get_epoch()) {
       break;
     }
@@ -7023,7 +7027,7 @@ void OSD::dispatch_session_waiting(const ceph::ref_t<Session>& session, OSDMapRe
   }
 }
 
-// zhou: README,
+// zhou: README, OSD message hander
 void OSD::ms_fast_dispatch(Message *m)
 {
   FUNCTRACE(cct);
@@ -7119,6 +7123,7 @@ void OSD::ms_fast_dispatch(Message *m)
       session->waiting_on_map.push_back(*op);
 
       OSDMapRef nextmap = service.get_nextmap_reserved();
+      // zhou:
       dispatch_session_waiting(session, nextmap);
       service.release_map(nextmap);
     }
@@ -9615,6 +9620,7 @@ bool OSD::op_is_discardable(const MOSDOp *op)
   return false;
 }
 
+// zhou: README,
 void OSD::enqueue_op(spg_t pg, OpRequestRef&& op, epoch_t epoch)
 {
   const utime_t stamp = op->get_req()->get_recv_stamp();
@@ -9631,11 +9637,13 @@ void OSD::enqueue_op(spg_t pg, OpRequestRef&& op, epoch_t epoch)
   op->osd_trace.event("enqueue op");
   op->osd_trace.keyval("priority", priority);
   op->osd_trace.keyval("cost", cost);
+
   op->mark_queued_for_pg();
   logger->tinc(l_osd_op_before_queue_op_lat, latency);
 
   // zhou: not Erease Code mode, OSC internal Work Queue, composited with
-  //       several list.
+  //       several list???
+  //       add "op_shardedwq"
   op_shardedwq.queue(
     OpSchedulerItem(
       unique_ptr<OpSchedulerItem::OpQueueable>(new PGOpItem(pg, std::move(op))),
@@ -9658,6 +9666,7 @@ void OSD::enqueue_peering_evt(spg_t pgid, PGPeeringEventRef evt)
 /*
  * NOTE: dequeue called in worker thread, with pg lock
  */
+// zhou: OSD map update
 void OSD::dequeue_op(
   PGRef pg, OpRequestRef op,
   ThreadPool::TPHandle &handle)
@@ -9689,7 +9698,7 @@ void OSD::dequeue_op(
   op->mark_reached_pg();
   op->osd_trace.event("dequeue_op");
 
-  // zhou: README,
+  // zhou: README, PrimaryLogPG::do_request()
   pg->do_request(op, handle);
 
   // finish

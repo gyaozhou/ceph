@@ -1,7 +1,7 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 
-#include "boost/algorithm/string.hpp" 
+#include "boost/algorithm/string.hpp"
 #include "bluestore_common.h"
 #include "BlueFS.h"
 
@@ -315,6 +315,7 @@ void BlueFS::_update_logger_stats()
   }
 }
 
+// zhou: README,
 int BlueFS::add_block_device(unsigned id, const string& path, bool trim,
 			     bool shared_with_bluestore)
 {
@@ -1019,7 +1020,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
   dout(10) << __func__ << " log_fnode " << super.log_fnode << dendl;
   if (unlikely(to_stdout)) {
     std::cout << " log_fnode " << super.log_fnode << std::endl;
-  } 
+  }
 
   FileReader *log_reader = new FileReader(
     log_file, cct->_conf->bluefs_max_prefetch,
@@ -1041,9 +1042,9 @@ int BlueFS::_replay(bool noop, bool to_stdout)
       }
     }
   }
-  
+
   bool first_log_check = true;
-  
+
   while (true) {
     ceph_assert((log_reader->buf.pos & ~super.block_mask()) == 0);
     uint64_t pos = log_reader->buf.pos;
@@ -1369,13 +1370,13 @@ int BlueFS::_replay(bool noop, bool to_stdout)
                       << ":  op_dir_unlink " << " " << dirname << "/" << filename
                       << std::endl;
           }
- 
+
 	  if (!noop) {
 	    map<string,DirRef>::iterator q = dir_map.find(dirname);
 	    ceph_assert(q != dir_map.end());
 	    map<string,FileRef>::iterator r = q->second->file_map.find(filename);
 	    ceph_assert(r != q->second->file_map.end());
-            ceph_assert(r->second->refs > 0); 
+            ceph_assert(r->second->refs > 0);
 	    --r->second->refs;
 	    q->second->file_map.erase(r);
 	  }
@@ -1443,7 +1444,7 @@ int BlueFS::_replay(bool noop, bool to_stdout)
                   return r;
                 }
               }
-            
+
               auto& fnode_extents = f->fnode.extents;
               for (auto e : fnode_extents) {
                 auto id = e.bdev;
@@ -2085,7 +2086,7 @@ int64_t BlueFS::_read(
       u_lock.unlock();
       s_lock.lock();
       // we should recheck if buffer is valid after lock downgrade
-      continue; 
+      continue;
     }
     left = buf->get_buf_remaining(off);
     dout(20) << __func__ << " left 0x" << std::hex << left
@@ -3149,7 +3150,7 @@ int BlueFS::_allocate(uint8_t id, uint64_t len,
   if (alloc[id]) {
     if (!node->extents.empty() && node->extents.back().bdev == id) {
       hint = node->extents.back().end();
-    }   
+    }
     extents.reserve(4);  // 4 should be (more than) enough for most allocations
     alloc_len = alloc[id]->allocate(round_up_to(len, alloc_size[id]),
 				    alloc_size[id], hint, &extents);
@@ -3214,7 +3215,7 @@ int BlueFS::_allocate(uint8_t id, uint64_t len,
   for (auto& p : extents) {
     node->append_extent(bluefs_extent_t(id, p.offset, p.length));
   }
-   
+
   return 0;
 }
 

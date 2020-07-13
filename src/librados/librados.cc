@@ -2831,7 +2831,7 @@ static CephContext *rados_create_cct(const char * const clustername,
   return cct;
 }
 
-// zhou:
+// zhou: README,
 extern "C" int rados_create(rados_t *pcluster, const char * const id)
 {
   CephInitParameters iparams(CEPH_ENTITY_TYPE_CLIENT);
@@ -4852,6 +4852,7 @@ extern "C" int rados_aio_read_traced(rados_ioctx_t io, const char *o,
 }
 #endif
 
+// zhou:
 extern "C" int rados_aio_write(rados_ioctx_t io, const char *o,
 				rados_completion_t completion,
 				const char *buf, size_t len, uint64_t off)

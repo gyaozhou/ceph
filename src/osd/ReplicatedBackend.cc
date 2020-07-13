@@ -458,6 +458,7 @@ void generate_transaction(
     });
 }
 
+// zhou: README,
 void ReplicatedBackend::submit_transaction(
   const hobject_t &soid,
   const object_stat_sum_t &delta_stats,
@@ -506,6 +507,7 @@ void ReplicatedBackend::submit_transaction(
     parent->get_acting_recovery_backfill_shards().begin(),
     parent->get_acting_recovery_backfill_shards().end());
 
+  // zhou: issue IO request to slave OSD
   issue_op(
     soid,
     at_version,
@@ -531,7 +533,7 @@ void ReplicatedBackend::submit_transaction(
     min_last_complete_ondisk,
     true,
     op_t);
-  
+
   op_t.register_on_commit(
     parent->bless_context(
       new C_OSD_OnOpCommit(this, &op)));
@@ -539,7 +541,11 @@ void ReplicatedBackend::submit_transaction(
   vector<ObjectStore::Transaction> tls;
   tls.push_back(std::move(op_t));
 
+  // zhou: PrimaryLogPG::queue_transactions() -> BlueStore::queue_transactions,
+  //       Perform IO request in local/master OSD.
+  //       API defined by class PGBackend::Listener,
   parent->queue_transactions(tls, op.op);
+
   if (at_version != eversion_t()) {
     parent->op_applied(at_version);
   }
@@ -1443,7 +1449,7 @@ void ReplicatedBackend::prepare_pull(
   op.recovery_info.soid = soid;
   op.recovery_info.version = v;
   op.recovery_progress.data_complete = false;
-  op.recovery_progress.omap_complete = !missing_iter->second.clean_regions.omap_is_dirty() 
+  op.recovery_progress.omap_complete = !missing_iter->second.clean_regions.omap_is_dirty()
                                 && HAVE_FEATURE(parent->min_peer_features(), SERVER_OCTOPUS);
   op.recovery_progress.data_recovered_to = 0;
   op.recovery_progress.first = true;
@@ -2033,7 +2039,7 @@ int ReplicatedBackend::build_push_op(const ObjectRecoveryInfo &recovery_info,
   if (progress.first) {
     int r = store->omap_get_header(ch, ghobject_t(recovery_info.soid), &out_op->omap_header);
     if(r < 0) {
-      dout(1) << __func__ << " get omap header failed: " << cpp_strerror(-r) << dendl; 
+      dout(1) << __func__ << " get omap header failed: " << cpp_strerror(-r) << dendl;
       return r;
     }
     r = store->getattrs(ch, ghobject_t(recovery_info.soid), out_op->attrset);

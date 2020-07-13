@@ -774,6 +774,7 @@ int librados::IoCtxImpl::aio_operate(const object_t& oid,
   return 0;
 }
 
+// zhou: README,
 int librados::IoCtxImpl::aio_read(const object_t oid, AioCompletionImpl *c,
 				  bufferlist *pbl, size_t len, uint64_t off,
 				  uint64_t snapid, const blkin_trace_info *info)
@@ -804,6 +805,7 @@ int librados::IoCtxImpl::aio_read(const object_t oid, AioCompletionImpl *c,
   return 0;
 }
 
+// zhou: README,
 int librados::IoCtxImpl::aio_read(const object_t oid, AioCompletionImpl *c,
 				  char *buf, size_t len, uint64_t off,
 				  uint64_t snapid, const blkin_trace_info *info)
@@ -925,6 +927,7 @@ int librados::IoCtxImpl::aio_cmpext(const object_t& oid,
   return 0;
 }
 
+// zhou: README,
 int librados::IoCtxImpl::aio_write(const object_t &oid, AioCompletionImpl *c,
 				   const bufferlist& bl, size_t len,
 				   uint64_t off, const blkin_trace_info *info)
@@ -2204,4 +2207,3 @@ int librados::IoCtxImpl::application_metadata_list(const std::string& app_name,
     });
   return r;
 }
-
