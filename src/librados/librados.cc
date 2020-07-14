@@ -2501,6 +2501,7 @@ int librados::Rados::pool_reverse_lookup(int64_t id, std::string *name)
   return client->pool_get_name(id, name);
 }
 
+// zhou: Monitor related commands
 int librados::Rados::mon_command(string cmd, const bufferlist& inbl,
 				 bufferlist *outbl, string *outs)
 {
@@ -2509,6 +2510,7 @@ int librados::Rados::mon_command(string cmd, const bufferlist& inbl,
   return client->mon_command(cmdvec, inbl, outbl, outs);
 }
 
+// zhou: OSD related commands
 int librados::Rados::osd_command(int osdid, std::string cmd, const bufferlist& inbl,
                                  bufferlist *outbl, std::string *outs)
 {
@@ -2517,6 +2519,7 @@ int librados::Rados::osd_command(int osdid, std::string cmd, const bufferlist& i
   return client->osd_command(osdid, cmdvec, inbl, outbl, outs);
 }
 
+// zhou: MGR related commands
 int librados::Rados::mgr_command(std::string cmd, const bufferlist& inbl,
                                  bufferlist *outbl, std::string *outs)
 {
@@ -2815,7 +2818,7 @@ librados::ObjectOperation::~ObjectOperation()
 }
 
 ///////////////////////////// C API //////////////////////////////
-
+// zhou: README,
 static CephContext *rados_create_cct(const char * const clustername,
                                      CephInitParameters *iparams)
 {
@@ -3635,20 +3638,24 @@ extern "C" int rados_monitor_log2(rados_t cluster, const char *level,
   return retval;
 }
 
+// zhou: README,
 extern "C" int rados_ioctx_create(rados_t cluster, const char *name, rados_ioctx_t *io)
 {
   tracepoint(librados, rados_ioctx_create_enter, cluster, name);
   librados::RadosClient *client = (librados::RadosClient *)cluster;
   librados::IoCtxImpl *ctx;
 
+  // zhou: create pool context librados::IoCtxImpl
   int r = client->create_ioctx(name, &ctx);
   if (r < 0) {
     tracepoint(librados, rados_ioctx_create_exit, r, NULL);
     return r;
   }
 
+  // zhou: assign to void *
   *io = ctx;
   ctx->get();
+
   tracepoint(librados, rados_ioctx_create_exit, 0, ctx);
   return 0;
 }
@@ -3752,16 +3759,22 @@ extern "C" int rados_ioctx_selfmanaged_snap_set_write_ctx(rados_ioctx_t io,
   return retval;
 }
 
+// zhou: README, write using context get from "rados_ioctx_create()"
 extern "C" int rados_write(rados_ioctx_t io, const char *o, const char *buf, size_t len, uint64_t off)
 {
   tracepoint(librados, rados_write_enter, io, o, buf, len, off);
+
   if (len > UINT_MAX/2)
     return -E2BIG;
+
   librados::IoCtxImpl *ctx = (librados::IoCtxImpl *)io;
   object_t oid(o);
   bufferlist bl;
   bl.append(buf, len);
+
+  // zhou: librados::IoCtxImpl::write()
   int retval = ctx->write(oid, bl, len, off);
+
   tracepoint(librados, rados_write_exit, retval);
   return retval;
 }
@@ -4860,12 +4873,16 @@ extern "C" int rados_aio_write(rados_ioctx_t io, const char *o,
   tracepoint(librados, rados_aio_write_enter, io, o, completion, buf, len, off);
   if (len > UINT_MAX/2)
     return -E2BIG;
+
   librados::IoCtxImpl *ctx = (librados::IoCtxImpl *)io;
   object_t oid(o);
   bufferlist bl;
   bl.append(buf, len);
+
+  // zhou: librados::IoCtxImpl::aio_write()
   int retval = ctx->aio_write(oid, (librados::AioCompletionImpl*)completion,
 			bl, len, off);
+
   tracepoint(librados, rados_aio_write_exit, retval);
   return retval;
 }

@@ -3817,14 +3817,18 @@ extern "C" int rbd_create3(rados_ioctx_t p, const char *name,
   return r;
 }
 
+// zhou:
 extern "C" int rbd_create4(rados_ioctx_t p, const char *name,
 			   uint64_t size, rbd_image_options_t opts)
 {
   librados::IoCtx io_ctx;
   librados::IoCtx::from_rados_ioctx_t(p, io_ctx);
   TracepointProvider::initialize<tracepoint_traits>(get_cct(io_ctx));
+
   tracepoint(librbd, create4_enter, io_ctx.get_pool_name().c_str(), io_ctx.get_id(), name, size, opts);
+
   librbd::ImageOptions opts_(opts);
+
   int r = librbd::create(io_ctx, name, "", size, opts_, "", "", false);
   tracepoint(librbd, create4_exit, r);
   return r;

@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -65,6 +65,8 @@ class ServerSocketImpl {
 ///
 /// A \c ConnectedSocket represents a full-duplex stream between
 /// two endpoints, a local endpoint and a remote endpoint.
+
+// zhou:
 class ConnectedSocket {
   std::unique_ptr<ConnectedSocketImpl> _csi;
 
@@ -126,13 +128,14 @@ class ConnectedSocket {
   explicit operator bool() const {
     return _csi.get();
   }
-};
+}; // zhou: class ConnectedSocket
 /// @}
 
 /// \addtogroup networking-module
 /// @{
 
 /// A listening socket, waiting to accept incoming network connections.
+// zhou: used for accept TCP connection.
 class ServerSocket {
   std::unique_ptr<ServerSocketImpl> _ssi;
  public:
@@ -181,7 +184,7 @@ class ServerSocket {
   explicit operator bool() const {
     return _ssi.get();
   }
-};
+}; // zhou: class ServerSocket
 /// @}
 
 class NetworkStack;
@@ -206,6 +209,7 @@ enum {
   l_msgr_last,
 };
 
+// zhou: life cycle of a connection
 class Worker {
   std::mutex init_lock;
   std::condition_variable init_cond;
@@ -290,8 +294,12 @@ class Worker {
     init_lock.unlock();
     done = false;
   }
-};
+}; // zhou: class Worker
 
+
+// zhou: class PosixNetworkStack/DPDKStack/RDMAStack derived from this abstract class.
+//       DPDK related files locate at src/msg/async/dpdk/
+//       RDMA related files locate at src/msg/async/rdma/
 class NetworkStack {
   std::string type;
   unsigned num_workers = 0;
@@ -302,6 +310,7 @@ class NetworkStack {
 
  protected:
   CephContext *cct;
+  // zhou: each worker is a life cycle of connection?
   std::vector<Worker*> workers;
 
   explicit NetworkStack(CephContext *c, const std::string &t);
@@ -344,6 +353,6 @@ class NetworkStack {
 
   virtual bool is_ready() { return true; };
   virtual void ready() { };
-};
+}; // zhou: class NetworkStack
 
 #endif //CEPH_MSG_ASYNC_STACK_H

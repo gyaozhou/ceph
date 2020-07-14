@@ -59,6 +59,7 @@ Processor::Processor(AsyncMessenger *r, Worker *w, CephContext *c)
   : msgr(r), net(c), worker(w),
     listen_handler(new C_processor_accept(this)) {}
 
+// zhou: README,
 int Processor::bind(const entity_addrvec_t &bind_addrs,
 		    const std::set<int>& avoid_ports,
 		    entity_addrvec_t* bound_addrs)
@@ -158,8 +159,8 @@ void Processor::start()
       for (auto& listen_socket : listen_sockets) {
 	if (listen_socket) {
           if (listen_socket.fd() == -1) {
-            ldout(msgr->cct, 1) << __func__ 
-                << " Error: processor restart after listen_socket.fd closed. " 
+            ldout(msgr->cct, 1) << __func__
+                << " Error: processor restart after listen_socket.fd closed. "
                 << this << dendl;
             return;
           }
@@ -333,7 +334,10 @@ void AsyncMessenger::ready()
 
   std::lock_guard l{lock};
   for (auto &&p : processors)
+    // zhou: NetworkStack::start(), new thread created.
     p->start();
+
+  // zhou: README,
   dispatch_queue.start();
 }
 
@@ -386,6 +390,7 @@ int AsyncMessenger::bindv(const entity_addrvec_t &bind_addrs)
 
   ldout(cct,10) << __func__ << " " << bind_addrs << dendl;
 
+  // zhou: always true in PosixNetworkStack and DPDKStack.
   if (!stack->is_ready()) {
     ldout(cct, 10) << __func__ << " Network Stack is not ready for bind yet - postponed" << dendl;
     pending_bind_addrs = bind_addrs;
@@ -401,6 +406,7 @@ int AsyncMessenger::bindv(const entity_addrvec_t &bind_addrs)
   entity_addrvec_t bound_addrs;
   unsigned i = 0;
   for (auto &&p : processors) {
+    // zhou: "Processor::bind()", due to DPDK make thinks complicated.
     int r = p->bind(bind_addrs, avoid_ports, &bound_addrs);
     if (r) {
       // Note: this is related to local tcp listen table problem.
@@ -521,6 +527,7 @@ int AsyncMessenger::client_reset()
   return 0;
 }
 
+// zhou:
 int AsyncMessenger::start()
 {
   std::scoped_lock l{lock};
@@ -904,7 +911,7 @@ bool AsyncMessenger::learned_addr(const entity_addr_t &peer_addr_for_me)
 	  if (!did_bind) {
 	    t.set_type(entity_addr_t::TYPE_ANY);
 	    t.set_port(0);
-	  } else {	  
+	  } else {
 	    t.set_type(a.get_type());
 	    t.set_port(a.get_port());
 	  }

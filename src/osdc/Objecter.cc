@@ -2188,9 +2188,11 @@ void Objecter::op_submit(Op *op, ceph_tid_t *ptid, int *ctx_budget)
   if (!ptid)
     ptid = &tid;
   op->trace.event("op submit");
+
   _op_submit_with_budget(op, rl, ptid, ctx_budget);
 }
 
+// zhou: README, used to handle throttle
 void Objecter::_op_submit_with_budget(Op *op,
 				      shunique_lock<ceph::shared_mutex>& sul,
 				      ceph_tid_t *ptid,
@@ -2296,6 +2298,7 @@ void Objecter::_send_op_account(Op *op)
   }
 }
 
+// zhou: README, find target address of this OP
 void Objecter::_op_submit(Op *op, shunique_lock<ceph::shared_mutex>& sul, ceph_tid_t *ptid)
 {
   // rwlock is locked
@@ -2306,9 +2309,11 @@ void Objecter::_op_submit(Op *op, shunique_lock<ceph::shared_mutex>& sul, ceph_t
   ceph_assert(op->session == NULL);
   OSDSession *s = NULL;
 
+  // zhou: caculate object target OSD.
   bool check_for_latest_map = _calc_target(&op->target, nullptr)
     == RECALC_OP_TARGET_POOL_DNE;
 
+  // zhou: get connection and its sesssion.
   // Try to get a session, including a retry if we need to take write lock
   int r = _get_session(op->target.osd, &s, sul);
   if (r == -EAGAIN ||
@@ -2339,6 +2344,7 @@ void Objecter::_op_submit(Op *op, shunique_lock<ceph::shared_mutex>& sul, ceph_t
   }
   ceph_assert(r == 0);
   ceph_assert(s);  // may be homeless
+
 
   _send_op_account(op);
 
@@ -2373,6 +2379,7 @@ void Objecter::_op_submit(Op *op, shunique_lock<ceph::shared_mutex>& sul, ceph_t
 
   _session_op_assign(s, op);
 
+  // zhou: send it finally
   if (need_send) {
     _send_op(op);
   }
@@ -2682,6 +2689,7 @@ void Objecter::_prune_snapc(
   }
 }
 
+// zhou: README, caculate the object's target OSD
 int Objecter::_calc_target(op_target_t *t, Connection *con, bool any_change)
 {
   // rwlock is locked
@@ -3772,7 +3780,7 @@ void Objecter::put_nlist_context_budget(NListContext *list_context)
 }
 
 // snapshots
-
+// zhou: README,
 void Objecter::create_pool_snap(int64_t pool, std::string_view snap_name,
 				decltype(PoolOp::onfinish)&& onfinish)
 {
@@ -3885,6 +3893,7 @@ void Objecter::delete_selfmanaged_snap(int64_t pool, snapid_t snap,
   pool_op_submit(op);
 }
 
+// zhou: README,
 void Objecter::create_pool(std::string_view name,
 			   decltype(PoolOp::onfinish)&& onfinish,
 			   int crush_rule)
@@ -3949,6 +3958,7 @@ void Objecter::_do_delete_pool(int64_t pool,
   pool_op_submit(op);
 }
 
+// zhou: README,
 void Objecter::pool_op_submit(PoolOp *op)
 {
   // rwlock is locked
@@ -3957,19 +3967,25 @@ void Objecter::pool_op_submit(PoolOp *op)
 				    [this, op]() {
 				      pool_op_cancel(op->tid, -ETIMEDOUT); });
   }
+
   _pool_op_submit(op);
 }
 
+// zhou:
 void Objecter::_pool_op_submit(PoolOp *op)
 {
   // rwlock is locked unique
 
   ldout(cct, 10) << "pool_op_submit " << op->tid << dendl;
+  // zhou: pool operation message
   auto m = new MPoolOp(monc->get_fsid(), op->tid, op->pool,
 		       op->name, op->pool_op,
 		       last_seen_osdmap_version);
+
   if (op->snapid) m->snapid = op->snapid;
   if (op->crush_rule) m->crush_rule = op->crush_rule;
+
+  // zhou: send this message to Monitor
   monc->send_mon_message(m);
   op->last_submit = ceph::coarse_mono_clock::now();
 

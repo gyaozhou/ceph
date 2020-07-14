@@ -42,6 +42,7 @@ class AioCompletionImpl;
 
 namespace neorados { namespace detail { class RadosClient; }}
 
+// zhou: README,
 class librados::RadosClient : public Dispatcher,
 			      public md_config_obs_t
 {
@@ -77,6 +78,7 @@ private:
   void ms_handle_remote_reset(Connection *con) override;
   bool ms_handle_refused(Connection *con) override;
 
+  // zhou: OSDC's class Objecter
   Objecter *objecter{nullptr};
 
   ceph::mutex lock = ceph::make_mutex("librados::RadosClient::lock");
@@ -193,6 +195,6 @@ public:
   const char** get_tracked_conf_keys() const override;
   void handle_conf_change(const ConfigProxy& conf,
                           const std::set <std::string> &changed) override;
-};
+}; // zhou: class librados::RadosClient
 
 #endif

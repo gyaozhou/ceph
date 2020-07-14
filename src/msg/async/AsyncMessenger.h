@@ -69,8 +69,10 @@ class Processor {
  * AsyncMessenger.
  *
  */
-
+// zhou: this is a concrete class
+//       SimplePolicyMessenger derived from class Messenger.
 class AsyncMessenger : public SimplePolicyMessenger {
+
   // First we have the public Messenger interface implementation...
 public:
   /**
@@ -212,8 +214,12 @@ private:
   static const uint64_t ReapDeadConnectionThreshold = 5;
 
   NetworkStack *stack;
+
+  // zhou: hander for accept connection
   std::vector<Processor*> processors;
   friend class Processor;
+
+  // zhou:
   DispatchQueue dispatch_queue;
 
   // the worker run messenger's cron jobs
@@ -421,6 +427,6 @@ public:
   /**
    * @} // AsyncMessenger Internals
    */
-} ;
+} ; // zhou: class AsyncMessenger
 
 #endif /* CEPH_ASYNCMESSENGER_H */

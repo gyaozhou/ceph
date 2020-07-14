@@ -34,6 +34,7 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "stack "
 
+// zhou: README,
 std::function<void ()> NetworkStack::add_thread(unsigned worker_id)
 {
   Worker *w = workers[worker_id];

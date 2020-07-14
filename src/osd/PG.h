@@ -1391,6 +1391,7 @@ protected:
     return recovery_state.should_send_notify();
   }
 
+  // zhou: PG state
   bool is_active() const { return recovery_state.is_active(); }
   bool is_activating() const { return recovery_state.is_activating(); }
   bool is_peering() const { return recovery_state.is_peering(); }
@@ -1502,6 +1503,7 @@ protected:
   friend ostream& operator<<(ostream& out, const PG& pg);
 
 protected:
+  // zhou:
   PeeringState recovery_state;
 
   // ref to recovery_state.pool

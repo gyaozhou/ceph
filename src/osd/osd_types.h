@@ -3937,7 +3937,7 @@ public:
 WRITE_CLASS_ENCODER(ObjectCleanRegions)
 std::ostream& operator<<(std::ostream& out, const ObjectCleanRegions& ocr);
 
-
+// zhou: README, encapsule a op and related input/output parameters
 struct OSDOp {
   ceph_osd_op op;
   sobject_t soid;
@@ -4039,7 +4039,7 @@ struct OSDOp {
       }
     }
   }
-};
+}; // zhou: struct OSDOp {}
 std::ostream& operator<<(std::ostream& out, const OSDOp& op);
 
 struct pg_log_op_return_item_t {

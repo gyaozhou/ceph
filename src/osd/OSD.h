@@ -976,6 +976,7 @@ struct OSDShardPGSlot {
   epoch_t waiting_for_merge_epoch = 0;
 };
 
+// zhou: README,
 struct OSDShard {
   const unsigned shard_id;
   CephContext *cct;
@@ -1777,6 +1778,7 @@ public:
   std::set<int64_t> get_mapped_pools();
 
 protected:
+  // zhou: create a new class PG object.
   PG* _make_pg(OSDMapRef createmap, spg_t pgid);
 
   bool maybe_wait_for_max_pg(const OSDMapRef& osdmap,
@@ -1929,6 +1931,7 @@ protected:
 
 private:
   bool ms_can_fast_dispatch_any() const override { return true; }
+  // zhou:
   bool ms_can_fast_dispatch(const Message *m) const override {
     switch (m->get_type()) {
     case CEPH_MSG_PING:
@@ -1988,6 +1991,7 @@ private:
  public:
   /* internal and external can point to the same messenger, they will still
    * be cleaned up properly*/
+  // zhou: a bunch of Messengers used for communication.
   OSD(CephContext *cct_,
       ObjectStore *store_,
       int id,
@@ -2000,6 +2004,7 @@ private:
       Messenger *osdc_messenger,
       MonClient *mc, const std::string &dev, const std::string &jdev,
       ceph::async::io_context_pool& poolctx);
+
   ~OSD() override;
 
   // static bits
@@ -2068,6 +2073,7 @@ public:
   static bool op_is_discardable(const MOSDOp *m);
 
 public:
+  // zhou:
   OSDService service;
   friend class OSDService;
 

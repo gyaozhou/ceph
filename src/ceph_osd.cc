@@ -531,14 +531,18 @@ flushjournal_out:
   }
 
   // messengers
+  // zhou: default value is "async+posix"
   std::string msg_type = g_conf().get_val<std::string>("ms_type");
+
   std::string public_msg_type =
     g_conf().get_val<std::string>("ms_public_type");
   std::string cluster_msg_type =
     g_conf().get_val<std::string>("ms_cluster_type");
 
+  // zhou: once not setted, use "async+posix".
   public_msg_type = public_msg_type.empty() ? msg_type : public_msg_type;
   cluster_msg_type = cluster_msg_type.empty() ? msg_type : cluster_msg_type;
+
   uint64_t nonce = Messenger::get_pid_nonce();
 
   // zhou: used to communicate with clients
@@ -570,8 +574,11 @@ flushjournal_out:
   Messenger *ms_objecter = Messenger::create(g_ceph_context, public_msg_type,
 					     entity_name_t::OSD(whoami), "ms_objecter",
 					     nonce, 0);
+
+
   if (!ms_public || !ms_cluster || !ms_hb_front_client || !ms_hb_back_client || !ms_hb_back_server || !ms_hb_front_server || !ms_objecter)
     forker.exit(1);
+
   ms_cluster->set_cluster_protocol(CEPH_OSD_PROTOCOL);
   ms_hb_front_client->set_cluster_protocol(CEPH_OSD_PROTOCOL);
   ms_hb_back_client->set_cluster_protocol(CEPH_OSD_PROTOCOL);
@@ -597,6 +604,7 @@ flushjournal_out:
     CEPH_FEATURE_UID |
     CEPH_FEATURE_PGID64 |
     CEPH_FEATURE_OSDENC;
+
 
   ms_public->set_default_policy(Messenger::Policy::stateless_registered_server(0));
   ms_public->set_policy_throttlers(entity_name_t::TYPE_CLIENT,
@@ -696,6 +704,7 @@ flushjournal_out:
     forker.exit(1);
   }
 
+  // zhou: class OSD used for communicate with OSDC and handle it in os/object store.
   osdptr = new OSD(g_ceph_context,
 		   store,
 		   whoami,
@@ -750,6 +759,7 @@ flushjournal_out:
   if (g_conf().get_val<bool>("inject_early_sigterm"))
     kill(getpid(), SIGTERM);
 
+  // zhou: wait for Messenger resource released???
   ms_public->wait();
   ms_hb_front_client->wait();
   ms_hb_back_client->wait();

@@ -67,6 +67,7 @@ struct Interceptor {
 
 // zhou: README,
 class Messenger {
+
 private:
   std::deque<Dispatcher*> dispatchers;
   std::deque<Dispatcher*> fast_dispatchers;
@@ -112,6 +113,8 @@ public:
   CephContext *cct;
   int crcflags;
 
+  // zhou: "Throttle", common/Throttle.h, "Throttles the maximum number of active requests."
+  //       "ceph::net::Policy" is defined in src/msg/Policy.h
   using Policy = ceph::net::Policy<Throttle>;
 
 public:
@@ -154,7 +157,9 @@ public:
                            uint64_t nonce,
 			   uint64_t cflags);
 
+  // zhou: get random number as nonce
   static uint64_t get_random_nonce();
+  // zhou: get pid as nonce, if failed use random number as nonce.
   static uint64_t get_pid_nonce();
 
   /**
@@ -170,6 +175,7 @@ public:
    * @param cct context
    * @param lname logical name of the messenger in this process (e.g., "client")
    */
+  // zhou: a slightly simpler interface for clients with several default arguments
   static Messenger *create_client_messenger(CephContext *cct, std::string lname);
 
   /**
@@ -184,6 +190,7 @@ public:
    * @return A const reference to the name this Messenger
    * currently believes to be its own.
    */
+  // zhou: "entity_name_t" set by Messenger::create()
   const entity_name_t& get_myname() { return my_name; }
 
   /**
@@ -228,6 +235,7 @@ protected:
     my_addrs = a;
     set_endpoint_addr(a.front(), my_name);
   }
+
 public:
   /**
    * @return the zipkin trace endpoint
@@ -293,6 +301,7 @@ public:
    * @param p The cluster protocol to use. Defined externally.
    */
   virtual void set_cluster_protocol(int p) = 0;
+
   /**
    * set a policy which is applied to all peers who do not have a type-specific
    * Policy.
@@ -302,6 +311,7 @@ public:
    * @param p The Policy to apply.
    */
   virtual void set_default_policy(Policy p) = 0;
+
   /**
    * set a policy which is applied to all peers of the given type.
    * This is an init-time function and cannot be called after calling
@@ -329,6 +339,7 @@ public:
    * @return A const Policy reference.
    */
   virtual Policy get_default_policy() = 0;
+
   /**
    * set Throttlers applied to all Messages from the given type of peer
    *
@@ -640,7 +651,7 @@ public:
 	ceph_assert(r == 0);
       }
     }
-  };
+  }; // zhou: struct sigpipe_stopper {}
 #  define MSGR_SIGPIPE_STOPPER Messenger::sigpipe_stopper stopper();
 #else
 #  define MSGR_SIGPIPE_STOPPER
@@ -670,6 +681,7 @@ public:
    * @param m The Message we are fast dispatching.
    * If none of our Dispatchers can handle it, ceph_abort().
    */
+  // zhou:
   void ms_fast_dispatch(const ceph::ref_t<Message> &m) {
     m->set_dispatch_stamp(ceph_clock_now());
     for (const auto &dispatcher : fast_dispatchers) {

@@ -27,7 +27,7 @@ class Connection;
 class CryptoKey;
 class KeyStore;
 
-// zhou: README,
+// zhou: README, abstract class for send messages.
 class Dispatcher {
 public:
   explicit Dispatcher(CephContext *cct_)

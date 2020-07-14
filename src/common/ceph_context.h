@@ -103,6 +103,7 @@ namespace ceph::common {
  * CephContext contains the configuration, the dout object, and anything else
  * that you might want to pass to libcommon with every function call.
  */
+// zhou: README,
 class CephContext {
 public:
   CephContext(uint32_t module_type_,
@@ -372,7 +373,7 @@ private:
   void _refresh_perf_values();
 
   friend class CephContextObs;
-};
+}; // zhou: class CephContext
 #ifdef __cplusplus
 }
 #endif

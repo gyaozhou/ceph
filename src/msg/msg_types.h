@@ -230,6 +230,9 @@ static inline void decode(sockaddr_storage& a,
  * thus identifies a particular process instance.
  * ipv4 for now.
  */
+// zhou: almost just a sockaddr, in additional:
+//       "type", identify user protocol used,
+//       "nonce", prevent message received from previous connection.
 struct entity_addr_t {
   typedef enum {
     TYPE_NONE = 0,
@@ -539,7 +542,7 @@ struct entity_addr_t {
   void dump(ceph::Formatter *f) const;
 
   static void generate_test_instances(std::list<entity_addr_t*>& o);
-};
+}; // zhou: struct entity_addr_t{}
 WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
@@ -560,6 +563,7 @@ template<> struct hash<entity_addr_t> {
 };
 } // namespace std
 
+// zhou: a vector of "struct entity_addr_t", just like several IPs on a node.
 struct entity_addrvec_t {
   std::vector<entity_addr_t> v;
 
@@ -710,7 +714,8 @@ struct entity_addrvec_t {
   friend bool operator<(const entity_addrvec_t& l, const entity_addrvec_t& r) {
     return l.v < r.v;  // see lexicographical_compare()
   }
-};
+}; // zhou: struct entity_addrvec_t {}
+
 WRITE_CLASS_ENCODER_FEATURES(entity_addrvec_t);
 
 namespace std {

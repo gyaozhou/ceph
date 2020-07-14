@@ -10,17 +10,22 @@
 
 #include "msg/async/AsyncMessenger.h"
 
+// zhou: Messenger for client use only, using several default arguments.
 Messenger *Messenger::create_client_messenger(CephContext *cct, std::string lname)
 {
   std::string public_msgr_type = cct->_conf->ms_public_type.empty() ? cct->_conf.get_val<std::string>("ms_type") : cct->_conf->ms_public_type;
   auto nonce = get_random_nonce();
+
   return Messenger::create(cct, public_msgr_type, entity_name_t::CLIENT(),
 			   std::move(lname), nonce, 0);
 }
 
+// zhou: get pid
 uint64_t Messenger::get_pid_nonce()
 {
   uint64_t nonce = getpid();
+
+  // zhou: interesting, pid in container is not valuable.
   if (nonce == 1) {
     // we're running in a container; use a random number instead!
     nonce = ceph::util::generate_random_number<uint64_t>();
@@ -28,12 +33,15 @@ uint64_t Messenger::get_pid_nonce()
   return nonce;
 }
 
+// zhou: "nonce" is number once, here get it by random number.
 uint64_t Messenger::get_random_nonce()
 {
   return ceph::util::generate_random_number<uint64_t>();
 }
 
-// zhou: README,
+// zhou: "type" is "async+posix";
+//       "lname" is "client/cluster/hb_back_client/..."
+//       Get Concrete object derived from Messenger. Only AsyncMessenger be used.
 Messenger *Messenger::create(CephContext *cct, const std::string &type,
 			     entity_name_t name, std::string lname,
 			     uint64_t nonce, uint64_t cflags)
@@ -43,8 +51,10 @@ Messenger *Messenger::create(CephContext *cct, const std::string &type,
     r = 0;
     //r = ceph::util::generate_random_number(0, 1);
   }
+
   if (r == 0 || type.find("async") != std::string::npos)
     return new AsyncMessenger(cct, name, type, std::move(lname), nonce);
+
   lderr(cct) << "unrecognized ms_type '" << type << "'" << dendl;
   return nullptr;
 }
@@ -108,6 +118,7 @@ int get_default_crc_flags(const ConfigProxy& conf)
   return r;
 }
 
+// zhou: masked by "AsyncMessenger::bindv()"
 int Messenger::bindv(const entity_addrvec_t& addrs)
 {
   return bind(addrs.legacy_addr());

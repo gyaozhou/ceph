@@ -79,9 +79,10 @@ using osdc_opvec = boost::container::small_vector<OSDOp, osdc_opvec_len>;
 
 // -----------------------------------------
 
-// zhou: operations of OSD Client
+// zhou: several operations by OSD Client, could be packaged to this struct.
 struct ObjectOperation {
   osdc_opvec ops;
+
   int flags = 0;
   int priority = 0;
 
@@ -1596,7 +1597,7 @@ struct ObjectOperation {
   void cache_unpin() {
     add_op(CEPH_OSD_OP_CACHE_UNPIN);
   }
-};
+}; // zhou: struct ObjectOperation {}
 
 inline std::ostream& operator <<(std::ostream& m, const ObjectOperation& oo) {
   auto i = oo.ops.cbegin();
@@ -1613,7 +1614,7 @@ inline std::ostream& operator <<(std::ostream& m, const ObjectOperation& oo) {
 
 
 // ----------------
-
+// zhou: README,
 class Objecter : public md_config_obs_t, public Dispatcher {
   using MOSDOp = _mosdop::MOSDOp<osdc_opvec>;
 public:
@@ -1627,7 +1628,9 @@ public:
 
 public:
   Messenger *messenger;
+  // zhou: Monitor client
   MonClient *monc;
+
   boost::asio::io_context& service;
   // The guaranteed sequenced, one-at-a-time execution and apparently
   // people sometimes depend on this.
@@ -1747,6 +1750,7 @@ public:
 
   struct OSDSession;
 
+  // zhou: object related PG, and PG located OSDs. Used to describe where the OP send to.
   struct op_target_t {
     int flags = 0;
 
@@ -1823,7 +1827,7 @@ public:
     }
 
     void dump(ceph::Formatter *f) const;
-  };
+  }; // zhou: struct op_target_t {}
 
   std::unique_ptr<ceph::async::Completion<void(boost::system::error_code)>>
   OpContextVert(Context* c) {
@@ -1874,6 +1878,7 @@ public:
       return nullptr;
   }
 
+  // zhou: encapsulate op with target/...
   struct Op : public RefCountedObject {
     OSDSession *session = nullptr;
     int incarnation = 0;
@@ -2035,7 +2040,7 @@ public:
     ~Op() override {
       trace.event("finish");
     }
-  };
+  }; // zhou: struct Op {}
 
   struct CB_Op_Map_Latest {
     Objecter *objecter;
@@ -2846,6 +2851,7 @@ public:
    */
   epoch_t op_cancel_writes(int r, int64_t pool=-1);
 
+  // zhou: README,
   // commands
   void osd_command(int osd, std::vector<std::string> cmd,
 		   ceph::buffer::list inbl, ceph_tid_t *ptid,
@@ -2870,6 +2876,7 @@ public:
     return init.result.get();
   }
 
+  // zhou: README,
   void pg_command(pg_t pgid, std::vector<std::string> cmd,
 		  ceph::buffer::list inbl, ceph_tid_t *ptid,
 		  decltype(CommandOp::onfinish)&& onfinish) {
@@ -3901,6 +3908,6 @@ public:
   PerfCounters *get_logger() {
     return logger;
   }
-};
+}; // zhou: class Objecter
 
 #endif

@@ -4499,7 +4499,7 @@ void OSD::recursive_remove_collection(CephContext* cct,
 
 // ======================================================
 // PG's
-
+// zhou: README,
 PG* OSD::_make_pg(
   OSDMapRef createmap,
   spg_t pgid)
@@ -4539,7 +4539,7 @@ PG* OSD::_make_pg(
   PG *pg;
   if (pi.type == pg_pool_t::TYPE_REPLICATED ||
       pi.type == pg_pool_t::TYPE_ERASURE)
-    // zhou:
+    // zhou: class PrimaryLogPG derived from PG.
     pg = new PrimaryLogPG(&service, createmap, pool, ec_profile, pgid);
   else
     ceph_abort();
@@ -4658,6 +4658,7 @@ PGRef OSD::lookup_lock_pg(spg_t pgid)
   return _lookup_lock_pg(pgid);
 }
 
+// zhou:
 void OSD::load_pgs()
 {
   ceph_assert(ceph_mutex_is_locked(osd_lock));
@@ -4766,7 +4767,7 @@ void OSD::load_pgs()
   dout(0) << __func__ << " opened " << num << " pgs" << dendl;
 }
 
-
+// zhou: README,
 PGRef OSD::handle_pg_create_info(const OSDMapRef& osdmap,
 				 const PGCreateInfo *info)
 {
@@ -8933,7 +8934,7 @@ bool OSD::require_same_or_newer_map(OpRequestRef& op, epoch_t epoch,
 
 // ----------------------------------------
 // pg creation
-
+// zhou: README,
 void OSD::split_pgs(
   PG *parent,
   const set<spg_t> &childpgids, set<PGRef> *out_pgs,
@@ -10450,6 +10451,7 @@ void OSD::ShardedOpWQ::_add_slot_waiter(
 #undef dout_prefix
 #define dout_prefix *_dout << "osd." << osd->whoami << " op_wq(" << shard_index << ") "
 
+// zhou: README,
 void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb)
 {
   uint32_t shard_index = thread_index % osd->num_shards;

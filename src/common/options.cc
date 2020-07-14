@@ -875,11 +875,13 @@ std::vector<Option> get_global_options() {
     .set_description("Enable internal performance metrics")
     .set_long_description("If enabled, collect and expose internal health metrics"),
 
+    // zhou: default communication type
     Option("ms_type", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_flag(Option::FLAG_STARTUP)
     .set_default("async+posix")
     .set_description("Messenger implementation to use for network communication"),
 
+    // zhou:
     Option("ms_public_type", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
     .set_flag(Option::FLAG_STARTUP)
@@ -887,6 +889,7 @@ std::vector<Option> get_global_options() {
     .set_long_description("If not specified, use ms_type")
     .add_see_also("ms_type"),
 
+    // zhou:
     Option("ms_cluster_type", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
     .set_flag(Option::FLAG_STARTUP)

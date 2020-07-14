@@ -22,7 +22,7 @@
 
 
 //namespace ceph {
-
+// zhou: README, handle strip data from client.
   class Striper {
   public:
     static void file_to_extents(
@@ -128,7 +128,7 @@
           uint64_t* bl_off, uint64_t tofs, uint64_t tlen);
     };
 
-  };
+  }; // zhou: class Striper
 
 //};
 

@@ -233,7 +233,7 @@
 // ======================================================
 
 // abstract Message class
-
+// zhou: abstract Message class, all kinds of message should derive from this class.
 class Message : public RefCountedObject {
 public:
 #ifdef WITH_SEASTAR
@@ -243,8 +243,10 @@ public:
 #endif // WITH_SEASTAR
 
 protected:
+  // zhou: message header
   ceph_msg_header  header;      // headerelope
   ceph_msg_footer  footer;
+
   ceph::buffer::list       payload;  // "front" unaligned blob
   ceph::buffer::list       middle;   // "middle" unaligned blob
   ceph::buffer::list       data;     // data payload (page-alignment will be preserved where possible)
@@ -288,6 +290,7 @@ public:
 				   &Message::dispatch_q>> Queue;
 
   ceph::mono_time queue_start;
+
 protected:
   CompletionHook* completion_hook = nullptr; // owned by Messenger
 
