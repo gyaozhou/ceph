@@ -5663,6 +5663,7 @@ int PrimaryLogPG::do_sparse_read(OpContext *ctx, OSDOp& osd_op) {
   return 0;
 }
 
+// zhou: README, handle OSD related OPs
 int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 {
   int result = 0;
@@ -5838,6 +5839,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       }
       break;
 
+      // zhou: handle client defined OP with registered extention?
     case CEPH_OSD_OP_CALL:
       {
 	string cname, mname;

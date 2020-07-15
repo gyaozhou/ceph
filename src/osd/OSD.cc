@@ -3481,6 +3481,7 @@ int OSD::init()
       goto out;
   }
 
+  // zhou: enabled all Cls?
   if (cct->_conf->osd_open_classes_on_start) {
     int r = ClassHandler::get_instance().open_all_classes();
     if (r)
