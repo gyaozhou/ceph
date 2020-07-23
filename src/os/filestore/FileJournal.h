@@ -82,6 +82,7 @@ public:
   ceph::mutex writeq_lock = ceph::make_mutex("FileJournal::writeq_lock");
   ceph::condition_variable writeq_cond;
   std::list<write_item> writeq;
+
   bool writeq_empty();
   write_item &peek_write();
   void pop_write();
@@ -90,6 +91,7 @@ public:
 
   ceph::mutex completions_lock =
     ceph::make_mutex("FileJournal::completions_lock");
+
   // zhou:
   std::list<completion_item> completions;
 
@@ -550,7 +552,7 @@ private:
   void corrupt_header_magic(
     int wfd,
     uint64_t seq);
-};
+}; // zhou: class FileJournal
 
 WRITE_CLASS_ENCODER(FileJournal::header_t)
 

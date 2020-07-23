@@ -464,6 +464,7 @@ int FileJournal::open(uint64_t fs_op_seq)
   read_pos = header.start;
   seq = header.start_seq;
 
+  // zhou: read jonrnal when open it ???
   while (1) {
     bufferlist bl;
     off64_t old_pos = read_pos;
@@ -630,7 +631,10 @@ void FileJournal::start_writer()
 {
   write_stop = false;
   aio_stop = false;
+
+  // zhou: thread created
   write_thread.create("journal_write");
+
 #ifdef HAVE_LIBAIO
   if (aio)
     write_finish_thread.create("journal_wrt_fin");
@@ -913,12 +917,15 @@ void FileJournal::queue_write_fin(uint64_t seq, Context *fin)
 }
 */
 
+// zhou: README, write_finish_thread,
 void FileJournal::queue_completions_thru(uint64_t seq)
 {
   ceph_assert(ceph_mutex_is_locked(finisher_lock));
+
   utime_t now = ceph_clock_now();
   list<completion_item> items;
   batch_pop_completions(items);
+
   list<completion_item>::iterator it = items.begin();
   while (it != items.end()) {
     completion_item& next = *it;
@@ -930,11 +937,15 @@ void FileJournal::queue_completions_thru(uint64_t seq)
 	     << " queueing seq " << next.seq
 	     << " " << next.finish
 	     << " lat " << lat << dendl;
+
     if (logger) {
       logger->tinc(l_filestore_journal_latency, lat);
     }
+
+    // zhou: queue to callback function execution list?
     if (next.finish)
       finisher->queue(next.finish);
+
     if (next.tracked_op) {
       next.tracked_op->mark_event("journaled_completion_queued");
       next.tracked_op->journal_trace.event("queued completion");
@@ -942,6 +953,7 @@ void FileJournal::queue_completions_thru(uint64_t seq)
     }
     items.erase(it++);
   }
+
   batch_unpop_completions(items);
   finisher_cond.notify_all();
 }
@@ -1193,6 +1205,7 @@ void FileJournal::do_write(bufferlist& bl)
   }
 }
 
+// zhou: wait for completion
 void FileJournal::flush()
 {
   dout(10) << "waiting for completions to empty" << dendl;
@@ -1205,7 +1218,7 @@ void FileJournal::flush()
   dout(10) << "flush done" << dendl;
 }
 
-// zhou: journal write thread?
+// zhou: README, journal write thread main loop.
 void FileJournal::write_thread_entry()
 {
   dout(10) << "write_thread_entry start" << dendl;
@@ -1259,6 +1272,7 @@ void FileJournal::write_thread_entry()
     uint64_t orig_bytes = 0;
 
     bufferlist bl;
+    // zhou:
     int r = prepare_multi_write(bl, orig_ops, orig_bytes);
     // Don't care about journal full if stoppping, so drop queue and
     // possibly let header get written and loop above to notice stop
@@ -1286,6 +1300,7 @@ void FileJournal::write_thread_entry()
     }
 
 #ifdef HAVE_LIBAIO
+    // zhou: submit aio
     if (aio)
       do_aio_write(bl);
     else
@@ -1300,6 +1315,7 @@ void FileJournal::write_thread_entry()
 }
 
 #ifdef HAVE_LIBAIO
+// zhou: README,
 void FileJournal::do_aio_write(bufferlist& bl)
 {
 
@@ -1387,6 +1403,7 @@ void FileJournal::do_aio_write(bufferlist& bl)
  * @param seq seq to trigger when this aio completes.  if 0, do not update any state
  * on completion.
  */
+// zhou: README,
 int FileJournal::write_aio_bl(off64_t& pos, bufferlist& bl, uint64_t seq)
 {
   dout(20) << "write_aio_bl " << pos << "~" << bl.length() << " seq " << seq << dendl;
@@ -1413,6 +1430,7 @@ int FileJournal::write_aio_bl(off64_t& pos, bufferlist& bl, uint64_t seq)
     aio_info& aio = aio_queue.back();
     aio.iov = iov;
 
+    // zhou:
     io_prep_pwritev(&aio.iocb, fd, aio.iov, n, pos);
 
     dout(20) << "write_aio_bl .. " << aio.off << "~" << aio.len
@@ -1433,12 +1451,14 @@ int FileJournal::write_aio_bl(off64_t& pos, bufferlist& bl, uint64_t seq)
     int attempts = 16;
     int delay = 125;
     do {
+      // zhou:
       int r = io_submit(aio_ctx, 1, &piocb);
       dout(20) << "write_aio_bl io_submit return value: " << r << dendl;
       if (r < 0) {
 	derr << "io_submit to " << aio.off << "~" << cur_len
 	     << " got " << cpp_strerror(r) << dendl;
 	if (r == -EAGAIN && attempts-- > 0) {
+	  // zhou: in write thread
 	  usleep(delay);
 	  delay *= 2;
 	  continue;
@@ -1452,12 +1472,14 @@ int FileJournal::write_aio_bl(off64_t& pos, bufferlist& bl, uint64_t seq)
     pos += cur_len;
   }
   aio_lock.lock();
+
   write_finish_cond.notify_all();
   aio_lock.unlock();
   return 0;
 }
 #endif
 
+// zhou: thread to handle aio completion
 void FileJournal::write_finish_thread_entry()
 {
 #ifdef HAVE_LIBAIO
@@ -1475,6 +1497,7 @@ void FileJournal::write_finish_thread_entry()
     }
 
     dout(20) << __func__ << " waiting for aio(s)" << dendl;
+
     io_event event[16];
     int r = io_getevents(aio_ctx, 1, 16, event, NULL);
     if (r < 0) {
@@ -1502,6 +1525,7 @@ void FileJournal::write_finish_thread_entry()
 		 << "~" << ai->len << " done" << dendl;
 	ai->done = true;
       }
+      // zhou:
       check_aio_completion();
     }
   }
@@ -1513,9 +1537,11 @@ void FileJournal::write_finish_thread_entry()
 /**
  * check aio_wait for completed aio, and update state appropriately.
  */
+// zhou: README,
 void FileJournal::check_aio_completion()
 {
   ceph_assert(ceph_mutex_is_locked(aio_lock));
+
   dout(20) << "check_aio_completion" << dendl;
 
   bool completed_something = false, signal = false;
@@ -1553,6 +1579,7 @@ void FileJournal::check_aio_completion()
       }
     }
   }
+
   if (signal) {
     // maybe write queue was waiting for aio count to drop?
     aio_cond.notify_all();
@@ -1560,6 +1587,7 @@ void FileJournal::check_aio_completion()
 }
 #endif
 
+// zhou: README, prepare LOG entry.
 int FileJournal::prepare_entry(vector<ObjectStore::Transaction>& tls, bufferlist* tbl) {
   dout(10) << "prepare_entry " << tls << dendl;
   int data_len = cct->_conf->journal_align_min_size - 1;
@@ -1612,7 +1640,7 @@ int FileJournal::prepare_entry(vector<ObjectStore::Transaction>& tls, bufferlist
   return h.len;
 }
 
-// zhou: submit a entry to journal.
+// zhou: README, submit a entry to journal.
 void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
 			       Context *oncommit, TrackedOpRef osd_op)
 {
@@ -1642,6 +1670,7 @@ void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
       osd_op->journal_trace.keyval("seq", seq);
     }
   }
+
   {
     std::lock_guard l1{writeq_lock};
 #ifdef HAVE_LIBAIO
@@ -1655,6 +1684,7 @@ void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
     aio_cond.notify_all();
 #endif
 
+    // zhou:
     completions.push_back(
       completion_item(
 	seq, oncommit, ceph_clock_now(), osd_op));
@@ -1662,6 +1692,7 @@ void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
     if (writeq.empty())
       writeq_cond.notify_all();
 
+    // zhou:
     writeq.push_back(write_item(seq, e, orig_len, osd_op));
 
     if (osd_op)
@@ -1675,6 +1706,7 @@ bool FileJournal::writeq_empty()
   return writeq.empty();
 }
 
+// zhou: peek from write queue
 FileJournal::write_item &FileJournal::peek_write()
 {
   ceph_assert(ceph_mutex_is_locked(write_lock));
@@ -1874,7 +1906,9 @@ int FileJournal::make_writeable()
 
   must_write_header = true;
 
+  // zhou: create write thread
   start_writer();
+
   return 0;
 }
 
@@ -1947,6 +1981,7 @@ void FileJournal::wrap_read_bl(
     *out_pos = pos;
 }
 
+// zhou: README,
 bool FileJournal::read_entry(
   bufferlist &bl,
   uint64_t &next_seq,
@@ -1970,6 +2005,7 @@ bool FileJournal::read_entry(
     &bl,
     &seq,
     &ss);
+
   if (result == SUCCESS) {
     journalq.push_back( pair<uint64_t,off64_t>(seq, pos));
     uint64_t amount_to_take =
@@ -2100,6 +2136,7 @@ FileJournal::read_entry_result FileJournal::do_read_entry(
   return SUCCESS;
 }
 
+// zhou:
 void FileJournal::reserve_throttle_and_backoff(uint64_t count)
 {
   throttle.get(count);

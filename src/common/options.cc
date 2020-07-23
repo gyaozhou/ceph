@@ -3926,7 +3926,7 @@ std::vector<Option> get_global_options() {
     .add_see_also("bluestore_debug_omit_block_device_write")
     .set_description("write metadata only"),
 
-    // zhou: ???
+    // zhou: option for debug ???
     Option("objectstore_blackhole", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
     .set_description(""),
@@ -4974,17 +4974,21 @@ std::vector<Option> get_global_options() {
     .set_default(false)
     .set_description("Use XFS extsize ioctl(2) to hint allocator about expected write sizes"),
 
+    // zhou: "Enables parallel journaling, default for btrfs."
     Option("filestore_journal_parallel", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
+    // zhou: "Enables writeahead journaling, default for xfs."
     Option("filestore_journal_writeahead", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
+    // zhou: "Deprecated, never use."
     Option("filestore_journal_trailing", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
+
 
     Option("filestore_queue_max_ops", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(50)
@@ -5074,6 +5078,7 @@ std::vector<Option> get_global_options() {
     .set_default(1000)
     .set_description(""),
 
+    // zhou: "Drop any new transactions on the floor"
     Option("filestore_blackhole", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),

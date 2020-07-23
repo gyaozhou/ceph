@@ -24,8 +24,10 @@
 // zhou: README, handle interaction with Journal related operations
 class JournalingObjectStore : public ObjectStore {
 protected:
-  // zhou: FileStore::new_journal()
+  // zhou: FileStore::new_journal(), journal is enabled or not.
+  //       FileJournal object assgined to it.
   Journal *journal;
+
   // zhou:
   Finisher finisher;
 

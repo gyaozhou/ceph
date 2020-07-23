@@ -604,12 +604,15 @@ FileStore::FileStore(CephContext* cct, const std::string &base,
   m_filestore_max_xattr_value_size(0)
 {
   m_filestore_kill_at = cct->_conf->filestore_kill_at;
+
+  // zhou: create so many threads for completion callback function.
   for (int i = 0; i < m_ondisk_finisher_num; ++i) {
     ostringstream oss;
     oss << "filestore-ondisk-" << i;
     Finisher *f = new Finisher(cct, oss.str(), "fn_odsk_fstore");
     ondisk_finishers.push_back(f);
   }
+
   for (int i = 0; i < m_apply_finisher_num; ++i) {
     ostringstream oss;
     oss << "filestore-apply-" << i;
@@ -1950,6 +1953,7 @@ int FileStore::mount()
   sync_thread.create("filestore_sync");
 
   if (!(generic_flags & SKIP_JOURNAL_REPLAY)) {
+    // zhou:
     ret = journal_replay(initial_op_seq);
     if (ret < 0) {
       derr << __FUNC__ << ": failed to open journal " << journalpath << ": " << cpp_strerror(ret) << dendl;
@@ -2170,7 +2174,7 @@ ObjectStore::CollectionHandle FileStore::create_new_collection(const coll_t& c)
 
 
 /// -----------------------------
-
+// zhou: README, pack a vector of Transaction into one OP.
 FileStore::Op *FileStore::build_op(vector<Transaction>& tls,
 				   Context *onreadable,
 				   Context *onreadable_sync,
@@ -2192,6 +2196,7 @@ FileStore::Op *FileStore::build_op(vector<Transaction>& tls,
   o->ops = ops;
   o->bytes = bytes;
   o->osd_op = osd_op;
+
   return o;
 }
 
@@ -2217,6 +2222,7 @@ void FileStore::queue_op(OpSequencer *osr, Op *o)
   op_wq.queue(osr);
 }
 
+// zhou: throttle
 void FileStore::op_queue_reserve_throttle(Op *o)
 {
   throttle_ops.get();
@@ -2301,12 +2307,13 @@ struct C_JournaledAhead : public Context {
 
   C_JournaledAhead(FileStore *f, FileStore::OpSequencer *os, FileStore::Op *o, Context *ondisk):
     fs(f), osr(os), o(o), ondisk(ondisk) { }
+
   void finish(int r) override {
     fs->_journaled_ahead(osr, o, ondisk);
   }
 };
 
-// zhou: README,
+// zhou: README, invoked by PrimaryLogPG::queue_transactions()
 int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls,
 				  TrackedOpRef osd_op,
 				  ThreadPool::TPHandle *handle)
@@ -2314,9 +2321,12 @@ int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls
   Context *onreadable;
   Context *ondisk;
   Context *onreadable_sync;
+
+  // zhou: extract context from "t"
   ObjectStore::Transaction::collect_contexts(
     tls, &onreadable, &ondisk, &onreadable_sync);
 
+  // zhou: debug only???
   if (cct->_conf->objectstore_blackhole) {
     dout(0) << __FUNC__ << ": objectstore_blackhole = TRUE, dropping transaction"
 	    << dendl;
@@ -2340,7 +2350,9 @@ int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls
     trace = osd_op->store_trace;
   }
 
+  // zhou: JournalingObjectStore::journal
   if (journal && journal->is_writeable() && !m_filestore_journal_trailing) {
+
     Op *o = build_op(tls, onreadable, onreadable_sync, osd_op);
 
     //prepare and encode transactions data out of lock
@@ -2356,6 +2368,7 @@ int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls
     if (handle)
       handle->reset_tp_timeout();
 
+    // zhou: JournalingObjectStore::SubmitManager::op_submit_start(), lock journal
     uint64_t op_num = submit_manager.op_submit_start();
     o->op = op_num;
     trace.keyval("opnum", op_num);
@@ -2364,34 +2377,45 @@ int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls
       dump_transactions(o->tls, o->op, osr);
 
     if (m_filestore_journal_parallel) {
+      // zhou: used by btrfs
       dout(5) << __FUNC__ << ": (parallel) " << o->op << " " << o->tls << dendl;
 
       trace.keyval("journal mode", "parallel");
       trace.event("journal started");
+
       _op_journal_transactions(tbl, orig_len, o->op, ondisk, osd_op);
 
       // queue inside submit_manager op submission lock
       queue_op(osr, o);
       trace.event("op queued");
     } else if (m_filestore_journal_writeahead) {
+      // zhou: used by xfs
       dout(5) << __FUNC__ << ": (writeahead) " << o->op << " " << o->tls << dendl;
 
+      // zhou: ?
       osr->queue_journal(o);
 
       trace.keyval("journal mode", "writeahead");
       trace.event("journal started");
+
+      // zhou: FileJournal::submit_entry()
       _op_journal_transactions(tbl, orig_len, o->op,
 			       new C_JournaledAhead(this, osr, o, ondisk),
 			       osd_op);
     } else {
       ceph_abort();
     }
+    // zhou: JournalingObjectStore::SubmitManager::op_submit_finish(), unlock
     submit_manager.op_submit_finish(op_num);
+
     utime_t end = ceph_clock_now();
     logger->tinc(l_filestore_queue_transaction_latency_avg, end - start);
+
+    // zhou: xfs return
     return 0;
   }
 
+  // zhou: journal disabled
   if (!journal) {
     Op *o = build_op(tls, onreadable, onreadable_sync, osd_op);
     dout(5) << __FUNC__ << ": (no journal) " << o << " " << tls << dendl;
@@ -2424,6 +2448,9 @@ int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls
   }
 
   ceph_assert(journal);
+
+  // zhou: for other case
+
   //prepare and encode transactions data out of lock
   bufferlist tbl;
   int orig_len = -1;
@@ -2467,6 +2494,7 @@ int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls
   return r;
 }
 
+// zhou: LOG write completed???
 void FileStore::_journaled_ahead(OpSequencer *osr, Op *o, Context *ondisk)
 {
   dout(5) << __FUNC__ << ": " << o << " seq " << o->op << " " << *osr << " " << o->tls << dendl;
@@ -2509,6 +2537,7 @@ int FileStore::_do_transactions(
   return 0;
 }
 
+// zhou: README,
 void FileStore::_set_global_replay_guard(const coll_t& cid,
 					 const SequencerPosition &spos)
 {
@@ -4385,6 +4414,7 @@ void FileStore::_flush_op_queue()
 /*
  * flush - make every queued write readable
  */
+// zhou: used in unmount
 void FileStore::flush()
 {
   dout(10) << __FUNC__ << dendl;
@@ -4400,7 +4430,9 @@ void FileStore::flush()
 
   if (m_filestore_journal_writeahead) {
     if (journal)
+      // zhou: FileJournal::flush(), will be blocked.
       journal->flush();
+
     dout(10) << __FUNC__ << ": draining ondisk finisher" << dendl;
     for (vector<Finisher*>::iterator it = ondisk_finishers.begin(); it != ondisk_finishers.end(); ++it) {
       (*it)->wait_for_empty();
@@ -4414,6 +4446,7 @@ void FileStore::flush()
 /*
  * sync_and_flush - make every queued write readable AND committed to disk
  */
+// zhou:
 void FileStore::sync_and_flush()
 {
   dout(10) << __FUNC__ << dendl;

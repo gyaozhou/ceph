@@ -35,7 +35,11 @@ ObjectStore
 1. BlueStore -> ObjectStore
              -> BlueFSDeviceExpander
 
+###
+FileStore
 
+1. FileStore -> JournalingObjectStore -> ObjectStore
+2. FileJournal -> Journal, used by JournalingObjectStore.
 
 ###
   // zhou: PrimaryLogPG::queue_transactions() ->

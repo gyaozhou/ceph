@@ -233,6 +233,11 @@ private:
     ZTracer::Trace trace;
     bool registered_apply = false;
   };
+
+  // zhou: different ObjectStore owns different implementation, doesn't share
+  //       abstract class.
+  //       Each PG own one OpSequencer used to serialize OP within a node.
+  //       It helps to make a OP be ACID within a node.
   class OpSequencer : public CollectionImpl {
     CephContext *cct;
     // to protect q, for benefit of flush (peek/dequeue also protected by lock)
@@ -245,6 +250,7 @@ private:
     std::string osr_name_str;
     /// hash of pointers to ghobject_t's for in-flight writes
     std::unordered_multimap<uint32_t,const ghobject_t*> applying;
+
   public:
     // for apply mutual exclusion
     ceph::mutex apply_lock =
@@ -378,7 +384,7 @@ private:
     ~OpSequencer() override {
       ceph_assert(q.empty());
     }
-  };
+  }; // zhou: class OpSequencer
   typedef boost::intrusive_ptr<OpSequencer> OpSequencerRef;
 
   ceph::mutex coll_lock = ceph::make_mutex("FileStore::coll_lock");
@@ -391,10 +397,12 @@ private:
 
   std::atomic<int64_t> next_osr_id = { 0 };
   bool m_disable_wbthrottle;
+  // zhou:
   deque<OpSequencer*> op_queue;
   BackoffThrottle throttle_ops, throttle_bytes;
   const int m_ondisk_finisher_num;
   const int m_apply_finisher_num;
+
   std::vector<Finisher*> ondisk_finishers;
   std::vector<Finisher*> apply_finishers;
 

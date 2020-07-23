@@ -40,6 +40,7 @@ void JournalingObjectStore::journal_write_close()
   apply_manager.reset();
 }
 
+// zhou: README, replay journal
 int JournalingObjectStore::journal_replay(uint64_t fs_op_seq)
 {
   dout(10) << "journal_replay fs op_seq " << fs_op_seq << dendl;
@@ -75,7 +76,7 @@ int JournalingObjectStore::journal_replay(uint64_t fs_op_seq)
   while (1) {
     bufferlist bl;
     uint64_t seq = op_seq + 1;
-    if (!journal->read_entry(bl, seq)) {
+    if (!journal->rcsead_entry(bl, seq)) {
       dout(3) << "journal_replay: end of journal, done." << dendl;
       break;
     }
@@ -162,6 +163,7 @@ void JournalingObjectStore::ApplyManager::op_apply_finish(uint64_t op)
     max_applied_seq = op;
 }
 
+// zhou: lock journal
 uint64_t JournalingObjectStore::SubmitManager::op_submit_start()
 {
   lock.lock();
@@ -170,6 +172,7 @@ uint64_t JournalingObjectStore::SubmitManager::op_submit_start()
   return op;
 }
 
+// zhou: unlock
 void JournalingObjectStore::SubmitManager::op_submit_finish(uint64_t op)
 {
   dout(10) << "op_submit_finish " << op << dendl;
@@ -261,6 +264,7 @@ void JournalingObjectStore::ApplyManager::commit_finish()
   }
 }
 
+// zhou:
 void JournalingObjectStore::_op_journal_transactions(
   bufferlist& tbl, uint32_t orig_len, uint64_t op,
   Context *onjournal, TrackedOpRef osd_op)

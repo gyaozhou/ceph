@@ -328,14 +328,17 @@ public:
 	!on_applied_sync.empty();
   }
 
+  // zhou: extract context from "t"
   static void collect_contexts(
     std::vector<Transaction>& t,
     Context **out_on_applied,
     Context **out_on_commit,
     Context **out_on_applied_sync) {
+
     ceph_assert(out_on_applied);
     ceph_assert(out_on_commit);
     ceph_assert(out_on_applied_sync);
+
     std::list<Context *> on_applied, on_commit, on_applied_sync;
     for (auto& i : t) {
 	on_applied.splice(on_applied.end(), i.on_applied);
@@ -346,14 +349,17 @@ public:
     *out_on_commit = C_Contexts::list_to_context(on_commit);
     *out_on_applied_sync = C_Contexts::list_to_context(on_applied_sync);
   }
+
   static void collect_contexts(
     std::vector<Transaction>& t,
     std::list<Context*> *out_on_applied,
     std::list<Context*> *out_on_commit,
     std::list<Context*> *out_on_applied_sync) {
+
     ceph_assert(out_on_applied);
     ceph_assert(out_on_commit);
     ceph_assert(out_on_applied_sync);
+
     for (auto& i : t) {
 	out_on_applied->splice(out_on_applied->end(), i.on_applied);
 	out_on_commit->splice(out_on_commit->end(), i.on_commit);

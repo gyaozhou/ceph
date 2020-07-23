@@ -26,7 +26,8 @@
 #include "os/ObjectStore.h"
 #include "common/zipkin_trace.h"
 
-// zhou: abstract class for journal
+// zhou: abstract class, FileJournal derived from this class.
+//       Define journal itself responsibility.
 class Journal {
 protected:
   uuid_d fsid;

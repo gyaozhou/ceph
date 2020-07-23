@@ -2488,6 +2488,7 @@ void OSD::asok_command(
     f->dump_unsigned("num_pgs", num_pgs);
     f->close_section();
   } else if (prefix == "flush_journal") {
+    // zhou: only supported by filestore
     store->flush_journal();
   } else if (prefix == "dump_ops_in_flight" ||
              prefix == "ops" ||
