@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -7,9 +7,9 @@
  *
  * This is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2.1, as published by the Free Software 
+ * License version 2.1, as published by the Free Software
  * Foundation.  See file COPYING.
- * 
+ *
  */
 #ifndef CEPH_ENCODING_H
 #define CEPH_ENCODING_H
@@ -178,7 +178,7 @@ WRITE_INTTYPE_ENCODER(int16_t, le16)
     ENCODE_DUMP_PRE(); c.encode(bl, features); ENCODE_DUMP_POST(cl); }	\
   inline void decode(cl &c, ::ceph::bufferlist::const_iterator &p) { c.decode(p); }
 
-
+// zhou: encode std::string
 // string
 inline void encode(std::string_view s, bufferlist& bl, uint64_t features=0)
 {
@@ -214,7 +214,7 @@ inline void decode_nohead(int len, std::string& s, bufferlist::const_iterator& p
 }
 
 // const char* (encode only, string compatible)
-inline void encode(const char *s, bufferlist& bl) 
+inline void encode(const char *s, bufferlist& bl)
 {
   encode(std::string_view(s, strlen(s)), bl);
 }
@@ -224,7 +224,7 @@ inline void encode(const char *s, bufferlist& bl)
 // buffers
 
 // bufferptr (encapsulated)
-inline void encode(const buffer::ptr& bp, bufferlist& bl) 
+inline void encode(const buffer::ptr& bp, bufferlist& bl)
 {
   __u32 len = bp.length();
   encode(len, bl);
@@ -248,13 +248,13 @@ inline void decode(buffer::ptr& bp, bufferlist::const_iterator& p)
 }
 
 // bufferlist (encapsulated)
-inline void encode(const bufferlist& s, bufferlist& bl) 
+inline void encode(const bufferlist& s, bufferlist& bl)
 {
   __u32 len = s.length();
   encode(len, bl);
   bl.append(s);
 }
-inline void encode_destructively(bufferlist& s, bufferlist& bl) 
+inline void encode_destructively(bufferlist& s, bufferlist& bl)
 {
   __u32 len = s.length();
   encode(len, bl);
@@ -268,7 +268,7 @@ inline void decode(bufferlist& s, bufferlist::const_iterator& p)
   p.copy(len, s);
 }
 
-inline void encode_nohead(const bufferlist& s, bufferlist& bl) 
+inline void encode_nohead(const bufferlist& s, bufferlist& bl)
 {
   bl.append(s);
 }
@@ -870,7 +870,7 @@ inline std::enable_if_t<!traits::supported>
   __u32 n;
   decode(n, p);
   v.resize(n);
-  for (__u32 i=0; i<n; i++) 
+  for (__u32 i=0; i<n; i++)
     decode(v[i], p);
 }
 
@@ -886,7 +886,7 @@ inline std::enable_if_t<!traits::supported>
   decode_nohead(int len, std::vector<T,Alloc>& v, bufferlist::const_iterator& p)
 {
   v.resize(len);
-  for (__u32 i=0; i<v.size(); i++) 
+  for (__u32 i=0; i<v.size(); i++)
     decode(v[i], p);
 }
 
@@ -980,6 +980,7 @@ inline void decode(std::vector<std::shared_ptr<T>,Alloc>& v,
   }
 }
 
+// zhou: encode std::map<>
 // map
 template<class T, class U, class Comp, class Alloc,
 	 typename t_traits, typename u_traits>
@@ -1346,7 +1347,7 @@ decode(std::array<T, N>& v, bufferlist::const_iterator& p)
  */
 #define DECODE_OLDEST(oldestv)						\
   if (struct_v < oldestv)						\
-    throw ::ceph::buffer::malformed_input(DECODE_ERR_OLDVERSION(__PRETTY_FUNCTION__, v, oldestv)); 
+    throw ::ceph::buffer::malformed_input(DECODE_ERR_OLDVERSION(__PRETTY_FUNCTION__, v, oldestv));
 
 /**
  * start a decoding block

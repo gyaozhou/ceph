@@ -547,6 +547,8 @@ int FileStore::lfn_unlink(const coll_t& cid, const ghobject_t& o,
   return 0;
 }
 
+// zhou: "base", directory/data path; "jdev", journal path;
+//       "name", filestore;
 FileStore::FileStore(CephContext* cct, const std::string &base,
 		     const std::string &jdev, osflagbits_t flags,
 		     const char *name, bool do_update) :
@@ -658,6 +660,7 @@ FileStore::FileStore(CephContext* cct, const std::string &base,
   plb.add_time_avg(l_filestore_queue_transaction_latency_avg, "queue_transaction_latency_avg",
                    "Store operation queue latency", NULL, PerfCountersBuilder::PRIO_USEFUL);
   plb.add_time(l_filestore_sync_pause_max_lat, "sync_pause_max_latency", "Max latency of op_wq pause before syncfs");
+
 
   logger = plb.create_perf_counters();
 
@@ -810,10 +813,12 @@ int FileStore::pool_statfs(uint64_t pool_id, struct store_statfs_t *buf,
   return -ENOTSUP;
 }
 
+// zhou: create journal file
 void FileStore::new_journal()
 {
   if (journalpath.length()) {
     dout(10) << "open_journal at " << journalpath << dendl;
+    // zhou: defined in JournalingObjectStore.h
     journal = new FileJournal(cct, fsid, &finisher, &sync_cond,
 			      journalpath.c_str(),
 			      m_journal_dio, m_journal_aio,
@@ -858,6 +863,7 @@ FileStoreBackend *FileStoreBackend::create(unsigned long f_type, FileStore *fs)
   }
 }
 
+// zhou:
 void FileStore::create_backend(unsigned long f_type)
 {
   m_fs_type = f_type;
@@ -886,6 +892,7 @@ void FileStore::create_backend(unsigned long f_type)
   set_xattr_limits_via_conf();
 }
 
+// zhou: README, invoked by OSD::mkfs()
 int FileStore::mkfs()
 {
   int ret = 0;
@@ -990,6 +997,7 @@ int FileStore::mkfs()
   }
 #endif
 
+  // zhou: "FileStoreBackend::create()"
   create_backend(basefs.f_type);
 
   ret = backend->create_current();
@@ -1008,6 +1016,7 @@ int FileStore::mkfs()
 	   << cpp_strerror(ret) << dendl;
       goto close_fsid_fd;
     }
+
     if (initial_seq == 0) {
       ret = write_op_seq(fd, 1);
       if (ret < 0) {
@@ -1387,6 +1396,7 @@ int FileStore::_sanity_check_fs()
   return 0;
 }
 
+// zhou: encode
 int FileStore::write_superblock()
 {
   bufferlist bl;
@@ -1506,6 +1516,7 @@ int FileStore::upgrade()
   return 0;
 }
 
+// zhou: README, read from file, get sequence.
 int FileStore::read_op_seq(uint64_t *seq)
 {
   int op_fd = ::open(current_op_seq_fn.c_str(), O_CREAT|O_RDWR|O_CLOEXEC, 0644);
@@ -1539,6 +1550,7 @@ int FileStore::write_op_seq(int fd, uint64_t seq)
   return ret;
 }
 
+// zhou: README, invoked by OSD::mkfs()
 int FileStore::mount()
 {
   int ret;
@@ -2132,7 +2144,7 @@ int FileStore::umount()
 // keep OpSequencer handles alive for all time so that a sequence
 // that removes a collection and creates a new one will not allow
 // two sequencers for the same collection to be alive at once.
-
+// zhou:
 ObjectStore::CollectionHandle FileStore::open_collection(const coll_t& c)
 {
   std::lock_guard l{coll_lock};
@@ -2294,6 +2306,7 @@ struct C_JournaledAhead : public Context {
   }
 };
 
+// zhou: README,
 int FileStore::queue_transactions(CollectionHandle& ch, vector<Transaction>& tls,
 				  TrackedOpRef osd_op,
 				  ThreadPool::TPHandle *handle)
@@ -3716,7 +3729,7 @@ int FileStore::_write(const coll_t& cid, const ghobject_t& oid,
     int rc = backend->_crc_update_write(**fd, offset, len, bl);
     ceph_assert(rc >= 0);
   }
- 
+
   if (replaying || m_disable_wbthrottle) {
     if (fadvise_flags & CEPH_OSD_OP_FLAG_FADVISE_DONTNEED) {
 #ifdef HAVE_POSIX_FADVISE
@@ -3727,7 +3740,7 @@ int FileStore::_write(const coll_t& cid, const ghobject_t& oid,
     wbthrottle.queue_wb(fd, oid, offset, len,
         fadvise_flags & CEPH_OSD_OP_FLAG_FADVISE_DONTNEED);
   }
- 
+
   lfn_close(fd);
 
  out:
@@ -3916,7 +3929,7 @@ int FileStore::_do_sparse_copy_range(int from, int to, uint64_t srcoff, uint64_t
     r = _do_fiemap(from, srcoff, len, &exomap);
   }
 
- 
+
  int64_t written = 0;
  if (r < 0)
     goto out;
@@ -6311,7 +6324,7 @@ uint64_t FileStore::estimate_objects_overhead(uint64_t num_objects)
 
 int FileStore::apply_layout_settings(const coll_t &cid, int target_level)
 {
-  dout(20) << __FUNC__ << ": " << cid << " target level: " 
+  dout(20) << __FUNC__ << ": " << cid << " target level: "
            << target_level << dendl;
   Index index;
   int r = get_index(cid, &index);
@@ -6326,7 +6339,6 @@ int FileStore::apply_layout_settings(const coll_t &cid, int target_level)
 
 
 // -- FSSuperblock --
-
 void FSSuperblock::encode(bufferlist &bl) const
 {
   ENCODE_START(2, 1, bl);

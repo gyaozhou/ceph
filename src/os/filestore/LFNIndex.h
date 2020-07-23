@@ -72,7 +72,9 @@
   }						\
 
 
-
+// zhou: README, Long File Name Index.
+//       Used to handle when object name is too long which can't be handled by
+//       file system. The extra part will be stored in extent attributes or KV store.
 class LFNIndex : public CollectionIndex {
   /// Hash digest output size.
   static const int FILENAME_LFN_DIGEST_SIZE = CEPH_CRYPTO_SHA1_DIGESTSIZE;
@@ -608,7 +610,7 @@ private:
     ); ///< @return Error Code, 0 on success.
 
   friend class TestWrapLFNIndex;
-};
+}; // zhou: class LFNIndex
 typedef LFNIndex::IndexedPath IndexedPath;
 
 #endif

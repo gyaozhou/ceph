@@ -458,7 +458,7 @@ void generate_transaction(
     });
 }
 
-// zhou: README,
+// zhou: README, mulitply replicas backend, handle transaction.
 void ReplicatedBackend::submit_transaction(
   const hobject_t &soid,
   const object_stat_sum_t &delta_stats,
@@ -541,7 +541,10 @@ void ReplicatedBackend::submit_transaction(
   vector<ObjectStore::Transaction> tls;
   tls.push_back(std::move(op_t));
 
-  // zhou: PrimaryLogPG::queue_transactions() -> BlueStore::queue_transactions,
+  // zhou: PrimaryLogPG::queue_transactions() ->
+  //         PGBackend::Listener->queue_transactions() ->
+  //            BlueStore::queue_transactions()/FileStore::queue_transactions
+  //
   //       Perform IO request in local/master OSD.
   //       API defined by class PGBackend::Listener,
   parent->queue_transactions(tls, op.op);

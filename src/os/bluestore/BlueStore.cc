@@ -9197,6 +9197,7 @@ void BlueStore::collect_metadata(map<string,string> *pm)
   }
 }
 
+// zhou: README, filestore don't care about NUMA.
 int BlueStore::get_numa_node(
   int *final_node,
   set<int> *out_nodes,

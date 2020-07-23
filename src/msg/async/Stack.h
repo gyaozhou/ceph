@@ -44,6 +44,7 @@ struct SocketOptions {
 };
 
 /// \cond internal
+// zhou:
 class ServerSocketImpl {
  public:
   unsigned addr_type; ///< entity_addr_t::TYPE_*
@@ -209,7 +210,7 @@ enum {
   l_msgr_last,
 };
 
-// zhou: life cycle of a connection
+// zhou: PosixWorker -> Worker, a thread
 class Worker {
   std::mutex init_lock;
   std::condition_variable init_cond;
@@ -223,6 +224,8 @@ class Worker {
   unsigned id;
 
   std::atomic_uint references;
+
+  // zhou: used to manage thread owns fd's events
   EventCenter center;
 
   Worker(const Worker&) = delete;
@@ -300,6 +303,7 @@ class Worker {
 // zhou: class PosixNetworkStack/DPDKStack/RDMAStack derived from this abstract class.
 //       DPDK related files locate at src/msg/async/dpdk/
 //       RDMA related files locate at src/msg/async/rdma/
+//       Manage threads to handle network stack.
 class NetworkStack {
   std::string type;
   unsigned num_workers = 0;
@@ -310,7 +314,7 @@ class NetworkStack {
 
  protected:
   CephContext *cct;
-  // zhou: each worker is a life cycle of connection?
+  // zhou: each worker is a thread, spawn by PosixNetworkStack::spawn_worker().
   std::vector<Worker*> workers;
 
   explicit NetworkStack(CephContext *c, const std::string &t);
@@ -322,6 +326,7 @@ class NetworkStack {
       delete w;
   }
 
+  // zhou: factory
   static std::shared_ptr<NetworkStack> create(
     CephContext *c, const std::string &type);
 
@@ -336,6 +341,7 @@ class NetworkStack {
   virtual bool support_local_listen_table() const { return false; }
   virtual bool nonblock_connect_need_writable_event() const { return true; }
 
+  // zhou: create threads
   void start();
   void stop();
   virtual Worker *get_worker();
@@ -347,6 +353,7 @@ class NetworkStack {
     return num_workers;
   }
 
+  // zhou: create thread
   // direct is used in tests only
   virtual void spawn_worker(unsigned i, std::function<void ()> &&) = 0;
   virtual void join_worker(unsigned i) = 0;

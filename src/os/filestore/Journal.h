@@ -26,7 +26,7 @@
 #include "os/ObjectStore.h"
 #include "common/zipkin_trace.h"
 
-
+// zhou: abstract class for journal
 class Journal {
 protected:
   uuid_d fsid;
@@ -89,6 +89,6 @@ public:
 
   // reads/recovery
 
-};
+}; // zhou: class Journal
 
 #endif

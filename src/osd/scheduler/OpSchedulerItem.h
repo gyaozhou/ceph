@@ -36,16 +36,20 @@ enum class op_scheduler_class : uint8_t {
   client,
 };
 
+// zhou: README, OpSchedulerItem is not abstract class, but nested two abstract class:
+//       "class OrderLocker" and "class OpQueueable".
 class OpSchedulerItem {
 public:
+  // zhou:
   class OrderLocker {
   public:
     using Ref = std::unique_ptr<OrderLocker>;
     virtual void lock() = 0;
     virtual void unlock() = 0;
     virtual ~OrderLocker() {}
-  };
+  }; // zhou: class OrderLocker
 
+  // zhou:
   // Abstraction for operations queueable in the op queue
   class OpQueueable {
   public:
@@ -95,7 +99,7 @@ public:
       return q.print(out);
     }
 
-  };
+  }; // zhou: class OpQueueable
 
 private:
   OpQueueable::Ref qitem;

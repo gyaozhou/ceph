@@ -69,8 +69,13 @@ struct Interceptor {
 class Messenger {
 
 private:
+  // zhou: dispatcher will deliver received messages to upper components
+  //       Any received message will try dispatcher one by one from head to tail.
+  //       Once can be handled, will not continue try.
+  //       So, one message will only deliver one time.
   std::deque<Dispatcher*> dispatchers;
   std::deque<Dispatcher*> fast_dispatchers;
+
   ZTracer::Endpoint trace_endpoint;
 
 protected:
@@ -150,6 +155,10 @@ public:
    * @param features bits for the local connection
    * @param cflags general std::set of flags to configure transport resources
    */
+
+  // zhou: "type" is "async+posix";
+  //       "lname" is "client/cluster/hb_back_client/..."
+  //       Get Concrete object derived from Messenger. Only AsyncMessenger be used.
   static Messenger *create(CephContext *cct,
                            const std::string &type,
                            entity_name_t name,
@@ -393,6 +402,7 @@ public:
    *
    * @param d The Dispatcher to insert into the list.
    */
+  // zhou:
   void add_dispatcher_head(Dispatcher *d) {
     bool first = dispatchers.empty();
     dispatchers.push_front(d);
@@ -710,6 +720,7 @@ public:
    *
    *  @param m The Message to deliver.
    */
+  // zhou: README, deliver a single message to upper
   void ms_deliver_dispatch(const ceph::ref_t<Message> &m) {
     m->set_dispatch_stamp(ceph_clock_now());
     for (const auto &dispatcher : dispatchers) {

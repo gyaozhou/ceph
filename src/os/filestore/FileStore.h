@@ -91,9 +91,12 @@ enum {
   l_filestore_last,
 };
 
+// zhou: Superblock preserve feature sets and omap backend permenetly.
 class FSSuperblock {
 public:
+  // zhou: ./src/include/CompatSet.h, FileStore feature management.
   CompatSet compat_features;
+  // zhou: where omap stored, leveldb or rockdb.
   std::string omap_backend;
 
   FSSuperblock() { }
@@ -102,7 +105,8 @@ public:
   void decode(ceph::buffer::list::const_iterator &bl);
   void dump(ceph::Formatter *f) const;
   static void generate_test_instances(std::list<FSSuperblock*>& o);
-};
+
+}; // zhou: class FSSuperblock
 WRITE_CLASS_ENCODER(FSSuperblock)
 
 inline std::ostream& operator<<(std::ostream& out, const FSSuperblock& sb)
@@ -111,6 +115,8 @@ inline std::ostream& operator<<(std::ostream& out, const FSSuperblock& sb)
              << sb.omap_backend;
 }
 
+
+// zhou: FileStore -> JournalingObjectStore -> ObjectStore
 class FileStore : public JournalingObjectStore,
                   public md_config_obs_t
 {
@@ -156,6 +162,7 @@ private:
 
   int fsid_fd, op_fd, basedir_fd, current_fd;
 
+  // zhou: the backend file system type, e.g. XFS/EXT4/BTRFS
   FileStoreBackend *backend;
 
   void create_backend(unsigned long f_type);
@@ -167,8 +174,10 @@ private:
 
   deque<uint64_t> snaps;
 
+  // zhou:
   // Indexed Collections
   IndexManager index_manager;
+
   int get_index(const coll_t& c, Index *index);
   int init_index(const coll_t& c);
 
@@ -658,7 +667,7 @@ public:
     fsid = u;
   }
   uuid_d get_fsid() override { return fsid; }
-  
+
   uint64_t estimate_objects_overhead(uint64_t num_objects) override;
 
   // DEBUG read error injection, an object is removed from both on delete()
@@ -855,12 +864,16 @@ private:
 
   friend class FileStoreBackend;
   friend class TestFileStore;
-};
+}; // zhou: class FileStore
 
 std::ostream& operator<<(std::ostream& out, const FileStore::OpSequencer& s);
 
+
+
 struct fiemap;
 
+// zhou: only "class GenericFileStoreBackend" derived from this class.
+//       Abstract class for dedicated file system, e.g. XFS/EXT4/BTRFS
 class FileStoreBackend {
 private:
   FileStore *filestore;
@@ -934,6 +947,6 @@ public:
 				      loff_t srcoff, size_t len, loff_t dstoff) = 0;
   virtual int _crc_verify_read(int fd, loff_t off, size_t len, const ceph::buffer::list& bl,
 			       std::ostream *out) = 0;
-};
+}; // zhou: class FileStoreBackend
 
 #endif

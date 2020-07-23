@@ -1603,12 +1603,13 @@ int PrimaryLogPG::do_scrub_ls(const MOSDOp *m, OSDOp *osd_op)
   return r;
 }
 
+// zhou: README, alloc PG backend object via PGBackend::build_pg_backend().
 PrimaryLogPG::PrimaryLogPG(OSDService *o, OSDMapRef curmap,
 			   const PGPool &_pool,
 			   const map<string,string>& ec_profile, spg_t p) :
   PG(o, curmap, _pool, p),
   pgbackend(
-    PGBackend::build_pg_backend(
+      PGBackend::build_pg_backend(
       _pool.info, ec_profile, this, coll_t(p), ch, o->store, cct)),
   object_contexts(o->cct, o->cct->_conf->osd_pg_object_context_cache_count),
   new_backfill(false),
@@ -1618,6 +1619,7 @@ PrimaryLogPG::PrimaryLogPG(OSDService *o, OSDMapRef curmap,
   recovery_state.set_backend_predicates(
     pgbackend->get_is_readable_predicate(),
     pgbackend->get_is_recoverable_predicate());
+
   snap_trimmer_machine.initiate();
 }
 
@@ -1648,6 +1650,7 @@ void PrimaryLogPG::handle_backoff(OpRequestRef& op)
 }
 
 // zhou: README, according to PG state, handle different messages.
+//       Invoked by OSD::dequeue_op()
 void PrimaryLogPG::do_request(
   OpRequestRef& op,
   ThreadPool::TPHandle &handle)
@@ -1761,7 +1764,7 @@ void PrimaryLogPG::do_request(
 	osd->reply_op_error(op, -EOPNOTSUPP);
 	return;
       }
-      // zhou:
+      // zhou: README, handle READ/WRITE
       do_op(op);
       break;
     case CEPH_MSG_OSD_BACKOFF:
@@ -2336,8 +2339,9 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
 
   op->mark_started();
 
-  // zhou:
+  // zhou: handle READ/WRITE
   execute_ctx(ctx);
+
   utime_t prepare_latency = ceph_clock_now();
   prepare_latency -= op->get_dequeued_time();
   osd->logger->tinc(l_osd_op_prepare_lat, prepare_latency);
@@ -3932,7 +3936,7 @@ void PrimaryLogPG::promote_object(ObjectContextRef obc,
     });
 }
 
-// zhou: README,
+// zhou: README, prepare transaction
 void PrimaryLogPG::execute_ctx(OpContext *ctx)
 {
   FUNCTRACE(cct);
@@ -3996,6 +4000,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
         reqid.name._num, reqid.tid, reqid.inc);
   }
 
+  // zhou: README,
   int result = prepare_transaction(ctx);
 
   {
@@ -4012,6 +4017,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
     if (pending_async_reads) {
       ceph_assert(pool.info.is_erasure());
       in_progress_async_reads.push_back(make_pair(op, ctx));
+      // zhou: handle READ?
       ctx->start_async_reads(this);
     }
     return;
@@ -4023,6 +4029,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
     return;
   }
 
+  // zhou: handle WRITE?
   bool ignore_out_data = false;
   if (!ctx->op_t->empty() &&
       op->may_write() &&
@@ -4815,6 +4822,7 @@ int PrimaryLogPG::do_writesame(OpContext *ctx, OSDOp& osd_op)
   write_op.op.op = CEPH_OSD_OP_WRITE;
   write_op.op.extent.offset = op.writesame.offset;
   write_op.op.extent.length = op.writesame.length;
+  // zhou: handle WRITE
   result = do_osd_ops(ctx, write_ops);
   if (result < 0)
     derr << "do_writesame do_osd_ops failed " << result << dendl;
@@ -5563,6 +5571,7 @@ int PrimaryLogPG::finish_extent_cmp(OSDOp& osd_op, const bufferlist &read_bl)
   return 0;
 }
 
+// zhou: README, handle READ
 int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
   dout(20) << __func__ << dendl;
   auto& op = osd_op.op;
@@ -5612,6 +5621,8 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
     if (oi.is_data_digest() && op.extent.offset == 0 &&
         op.extent.length >= oi.size)
       maybe_crc = oi.data_digest;
+
+    // zhou:
     ctx->pending_async_reads.push_back(
       make_pair(
         boost::make_tuple(op.extent.offset, op.extent.length, op.flags),
@@ -5623,6 +5634,7 @@ int PrimaryLogPG::do_read(OpContext *ctx, OSDOp& osd_op) {
 
     ctx->op_finishers[ctx->current_osd_subop_num].reset(
       new ReadFinisher(osd_op));
+
   } else {
     int r = pgbackend->objects_read_sync(
       soid, op.extent.offset, op.extent.length, op.flags, &osd_op.outdata);
@@ -5857,11 +5869,13 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       }
       // fall through
     case CEPH_OSD_OP_READ:
+      // zhou:
       ++ctx->num_read;
       tracepoint(osd, do_osd_op_pre_read, soid.oid.name.c_str(),
 		 soid.snap.val, oi.size, oi.truncate_seq, op.extent.offset,
 		 op.extent.length, op.extent.truncate_size,
 		 op.extent.truncate_seq);
+
       if (op_finisher == nullptr) {
 	if (!ctx->data_off) {
 	  ctx->data_off = op.extent.offset;
@@ -8543,6 +8557,7 @@ hobject_t PrimaryLogPG::get_temp_recovery_object(
   return hoid;
 }
 
+// zhou: README,
 int PrimaryLogPG::prepare_transaction(OpContext *ctx)
 {
   ceph_assert(!ctx->ops->empty());
@@ -10593,6 +10608,7 @@ void PrimaryLogPG::op_applied(const eversion_t &applied_version)
   }
 }
 
+// zhou: README,
 void PrimaryLogPG::eval_repop(RepGather *repop)
 {
   dout(10) << "eval_repop " << *repop
@@ -10642,7 +10658,7 @@ void PrimaryLogPG::eval_repop(RepGather *repop)
   }
 }
 
-// zhou: README,
+// zhou: README, send OP to ObjectStore
 void PrimaryLogPG::issue_repop(RepGather *repop, OpContext *ctx)
 {
   FUNCTRACE(cct);
@@ -10676,6 +10692,7 @@ void PrimaryLogPG::issue_repop(RepGather *repop, OpContext *ctx)
     ctx->at_version);
 
   // zhou: class ReplicatedBackend / class ECBackend
+  //       e.g. "ReplicatedBackend::submit_transaction()"
   pgbackend->submit_transaction(
     soid,
     ctx->delta_stats,

@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -100,6 +100,7 @@ std::ostream& EventCenter::_event_prefix(std::ostream *_dout)
                 << " time_id=" << time_event_next_id << ").";
 }
 
+// zhou: README,
 int EventCenter::init(int nevent, unsigned center_id, const std::string &type)
 {
   // can't init multi times
@@ -141,6 +142,7 @@ int EventCenter::init(int nevent, unsigned center_id, const std::string &type)
   if (!driver->need_wakeup())
     return 0;
 
+  // zhou: create a pipe
   int fds[2];
   if (pipe_cloexec(fds, 0) < 0) {
     int e = errno;
@@ -186,7 +188,7 @@ EventCenter::~EventCenter()
     delete notify_handler;
 }
 
-
+// zhou: README,
 void EventCenter::set_owner()
 {
   owner = pthread_self();
@@ -205,6 +207,7 @@ void EventCenter::set_owner()
   }
 }
 
+// zhou: README,
 int EventCenter::create_file_event(int fd, int mask, EventCallbackRef ctxt)
 {
   ceph_assert(in_thread());

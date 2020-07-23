@@ -21,13 +21,15 @@
 #include "common/RWLock.h"
 #include "osd/OpRequest.h"
 
-// zhou: README,
+// zhou: README, handle interaction with Journal related operations
 class JournalingObjectStore : public ObjectStore {
 protected:
+  // zhou: FileStore::new_journal()
   Journal *journal;
+  // zhou:
   Finisher finisher;
 
-
+  // zhou: submit manager
   class SubmitManager {
     CephContext* cct;
     ceph::mutex lock = ceph::make_mutex("JOS::SubmitManager::lock");
@@ -49,6 +51,7 @@ protected:
     }
   } submit_manager; // zhou: class SubmitManager
 
+  // zhou: apply manager
   class ApplyManager {
     CephContext* cct;
     Journal *&journal;

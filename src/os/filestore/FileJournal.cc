@@ -625,7 +625,7 @@ int FileJournal::_fdump(Formatter &f, bool simple)
   return err;
 }
 
-
+// zhou: create journal write thread
 void FileJournal::start_writer()
 {
   write_stop = false;
@@ -809,11 +809,13 @@ int FileJournal::check_for_full(uint64_t seq, off64_t pos, off64_t size)
   return -ENOSPC;
 }
 
+// zhou: pack several write_item into one bufferlist.
 int FileJournal::prepare_multi_write(bufferlist& bl, uint64_t& orig_ops, uint64_t& orig_bytes)
 {
   // gather queued writes
   off64_t queue_pos = write_pos;
 
+  // zhou: default entry number is 100, bytes is 10MB
   int eleft = cct->_conf->journal_max_write_entries;
   unsigned bmax = cct->_conf->journal_max_write_bytes;
 
@@ -1007,6 +1009,7 @@ void FileJournal::check_align(off64_t pos, bufferlist& bl)
   }
 }
 
+// zhou: README, write buffer list
 int FileJournal::write_bl(off64_t& pos, bufferlist& bl)
 {
   int ret;
@@ -1028,6 +1031,7 @@ int FileJournal::write_bl(off64_t& pos, bufferlist& bl)
   return 0;
 }
 
+// zhou: sync write with fdatasync()
 void FileJournal::do_write(bufferlist& bl)
 {
   // nothing to do?
@@ -1146,6 +1150,8 @@ void FileJournal::do_write(bufferlist& bl)
 #if defined(__APPLE__) || defined(__FreeBSD__)
     ret = ::fsync(fd);
 #else
+    // zhou: fsync() will flush access time/... some non-key metadata also.
+    //       fdatasync() will only flush data and key metadata.
     ret = ::fdatasync(fd);
 #endif
     if (ret < 0) {
@@ -1199,7 +1205,7 @@ void FileJournal::flush()
   dout(10) << "flush done" << dendl;
 }
 
-
+// zhou: journal write thread?
 void FileJournal::write_thread_entry()
 {
   dout(10) << "write_thread_entry start" << dendl;
@@ -1606,6 +1612,7 @@ int FileJournal::prepare_entry(vector<ObjectStore::Transaction>& tls, bufferlist
   return h.len;
 }
 
+// zhou: submit a entry to journal.
 void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
 			       Context *oncommit, TrackedOpRef osd_op)
 {
@@ -1651,9 +1658,12 @@ void FileJournal::submit_entry(uint64_t seq, bufferlist& e, uint32_t orig_len,
     completions.push_back(
       completion_item(
 	seq, oncommit, ceph_clock_now(), osd_op));
+
     if (writeq.empty())
       writeq_cond.notify_all();
+
     writeq.push_back(write_item(seq, e, orig_len, osd_op));
+
     if (osd_op)
       osd_op->journal_trace.keyval("queue depth", writeq.size());
   }

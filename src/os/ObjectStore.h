@@ -59,12 +59,13 @@ typedef uint32_t osflagbits_t;
 const int SKIP_JOURNAL_REPLAY = 1 << 0;
 const int SKIP_MOUNT_OMAP = 1 << 1;
 
-// zhou: README,
+// zhou: README, abstract class for filestore/bluestore/...
 class ObjectStore {
 protected:
   std::string path;
 
 public:
+  // zhou: src/os/Transaction.h
   using Transaction = ceph::os::Transaction;
 
   CephContext* cct;
@@ -213,7 +214,7 @@ public:
    *
    */
 
-
+  // zhou: queue 1 transaction
   int queue_transaction(CollectionHandle& ch,
 			Transaction&& t,
 			TrackedOpRef op = TrackedOpRef(),
@@ -223,6 +224,7 @@ public:
     return queue_transactions(ch, tls, op, handle);
   }
 
+  // zhou: queue several transaction
   virtual int queue_transactions(
     CollectionHandle& ch, std::vector<Transaction>& tls,
     TrackedOpRef op = TrackedOpRef(),

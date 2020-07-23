@@ -42,6 +42,7 @@ uint64_t Messenger::get_random_nonce()
 // zhou: "type" is "async+posix";
 //       "lname" is "client/cluster/hb_back_client/..."
 //       Get Concrete object derived from Messenger. Only AsyncMessenger be used.
+//       Invoked by ceph_osd.cc.
 Messenger *Messenger::create(CephContext *cct, const std::string &type,
 			     entity_name_t name, std::string lname,
 			     uint64_t nonce, uint64_t cflags)

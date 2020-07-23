@@ -655,11 +655,15 @@ namespace std {
 std::ostream& operator<<(std::ostream& out, const spg_t &pg);
 
 // ----------------------
-
+// zhou: README, collection is a directory of local filesystem (in FileStore),
+//       used to collect all objects of a PG.
 class coll_t {
+
   enum type_t {
+    // zhou: metadata related object
     TYPE_META = 0,
     TYPE_LEGACY_TEMP = 1,  /* no longer used */
+    // zhou: PG related object.
     TYPE_PG = 2,
     TYPE_PG_TEMP = 3,
   };
@@ -806,7 +810,7 @@ public:
 
   void dump(ceph::Formatter *f) const;
   static void generate_test_instances(std::list<coll_t*>& o);
-};
+}; // zhou: class coll_t
 
 WRITE_CLASS_ENCODER(coll_t)
 
@@ -850,6 +854,7 @@ inline std::ostream& operator<<(std::ostream& out, const ceph_object_layout &ol)
  * work well. For little-endian machine, we should make sure there is no padding
  * in 32-bit machine and 64-bit machine.
  */
+// zhou:
 class eversion_t {
 public:
   version_t version;
@@ -911,7 +916,7 @@ public:
     auto p = std::cbegin(bl);
     decode(p);
   }
-};
+}; // zhou: class eversion_t
 WRITE_CLASS_ENCODER(eversion_t)
 
 inline bool operator==(const eversion_t& l, const eversion_t& r) {
@@ -966,7 +971,7 @@ struct objectstore_perf_stat_t {
   void encode(ceph::buffer::list &bl, uint64_t features) const;
   void decode(ceph::buffer::list::const_iterator &bl);
   static void generate_test_instances(std::list<objectstore_perf_stat_t*>& o);
-};
+}; // zhou: struct objectstore_perf_stat_t {}
 WRITE_CLASS_ENCODER_FEATURES(objectstore_perf_stat_t)
 
 /*
@@ -1122,7 +1127,7 @@ private:
   opts_t opts;
 
   friend std::ostream& operator<<(std::ostream& out, const pool_opts_t& opts);
-};
+}; // zhou: class pool_opts_t
 WRITE_CLASS_ENCODER_FEATURES(pool_opts_t)
 
 struct pg_merge_meta_t {
@@ -1736,7 +1741,7 @@ public:
   void decode(ceph::buffer::list::const_iterator& bl);
 
   static void generate_test_instances(std::list<pg_pool_t*>& o);
-};
+}; // zhou: struct pg_pool_t {}
 WRITE_CLASS_ENCODER_FEATURES(pg_pool_t)
 
 std::ostream& operator<<(std::ostream& out, const pg_pool_t& p);
@@ -2002,7 +2007,7 @@ struct object_stat_sum_t {
   void encode(ceph::buffer::list& bl) const;
   void decode(ceph::buffer::list::const_iterator& bl);
   static void generate_test_instances(std::list<object_stat_sum_t*>& o);
-};
+}; // zhou: struct object_stat_sum_t {}
 WRITE_CLASS_ENCODER(object_stat_sum_t)
 
 bool operator==(const object_stat_sum_t& l, const object_stat_sum_t& r);
@@ -2207,7 +2212,7 @@ struct pg_stat_t {
   void encode(ceph::buffer::list &bl) const;
   void decode(ceph::buffer::list::const_iterator &bl);
   static void generate_test_instances(std::list<pg_stat_t*>& o);
-};
+}; // zhou: struct pg_stat_t {}
 WRITE_CLASS_ENCODER(pg_stat_t)
 
 bool operator==(const pg_stat_t& l, const pg_stat_t& r);
@@ -2337,7 +2342,7 @@ struct store_statfs_t
     DENC_FINISH(p);
   }
   static void generate_test_instances(std::list<store_statfs_t*>& o);
-};
+}; // zhou: struct store_statfs_t {}
 WRITE_CLASS_DENC(store_statfs_t)
 
 std::ostream &operator<<(std::ostream &lhs, const store_statfs_t &rhs);
@@ -3938,7 +3943,7 @@ public:
 WRITE_CLASS_ENCODER(ObjectCleanRegions)
 std::ostream& operator<<(std::ostream& out, const ObjectCleanRegions& ocr);
 
-// zhou: README, encapsule a op and related input/output parameters
+// zhou: README, encapsule a OSD Op and related input/output parameters
 struct OSDOp {
   ceph_osd_op op;
   sobject_t soid;
@@ -6218,7 +6223,7 @@ struct obj_list_snap_response_t {
     o.back()->clones.push_back(cl);
     o.back()->seq = 123;
   }
-};
+}; // zhou: struct obj_list_snap_response_t {}
 
 WRITE_CLASS_ENCODER(obj_list_snap_response_t)
 
@@ -6246,7 +6251,7 @@ struct PromoteCounter {
     objects = *o / 2;
     bytes = *b / 2;
   }
-};
+}; // zhou: struct PromoteCounter {}
 
 struct pool_pg_num_history_t {
   /// last epoch updated
@@ -6332,7 +6337,7 @@ struct pool_pg_num_history_t {
 	       << " deleted_pools " << h.deleted_pools
 	       << ")";
   }
-};
+}; // zhou: struct pool_pg_num_history_t {}
 WRITE_CLASS_ENCODER(pool_pg_num_history_t)
 
 // prefix pgmeta_oid keys with _ so that PGLog::read_log_and_missing() can
@@ -6369,6 +6374,7 @@ namespace ceph::os {
   class Transaction;
 };
 
+// zhou: free function
 void create_pg_collection(
   ceph::os::Transaction& t, spg_t pgid, int bits);
 

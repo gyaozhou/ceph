@@ -2650,6 +2650,7 @@ public:
   }
 
   int mkfs() override;
+  // zhou: do nothing on bluestore.
   int mkjournal() override {
     return 0;
   }

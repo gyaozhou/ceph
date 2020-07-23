@@ -88,6 +88,7 @@ struct aio_t {
   }
 }; // zhou: struct aio_t {}
 
+// zhou: NOT the member of "aio_t"
 std::ostream& operator<<(std::ostream& os, const aio_t& aio);
 
 typedef boost::intrusive::list<

@@ -48,6 +48,7 @@ extern std::string reverse_hexdigit_bits_string(std::string l);
  * split_rand_factor). The number of objects in a directory is encoded
  * as subdir_info_s in an xattr on the directory.
  */
+// zhou: HashIndex -> LFNIndex -> CollectionIndex
 class HashIndex : public LFNIndex {
 private:
   /// Attribute name for storing subdir info @see subdir_info_s
@@ -455,6 +456,6 @@ private:
   int split_dirs(const std::vector<std::string> &path, int target_level = 0);
 
   int write_settings();
-};
+}; // zhou: class HashIndex
 
 #endif

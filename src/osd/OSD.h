@@ -103,8 +103,13 @@ class MMonGetPurgedSnapsReply;
 class OSD;
 
 // zhou: README,
+//      "The OSDService acts as a broker between PG threads and OSD state which allows
+//       PGs to perform actions using OSD services such as workqueues and messengers.
+//       This is still a work in progress.  Future cleanups will focus on moving such
+//       state entirely from the OSD into the OSDService. "
 class OSDService {
   using OpSchedulerItem = ceph::osd::scheduler::OpSchedulerItem;
+
 public:
   OSD *osd;
   CephContext *cct;
@@ -951,8 +956,10 @@ public:
 
   */
 
+// zhou: README,
 struct OSDShardPGSlot {
   using OpSchedulerItem = ceph::osd::scheduler::OpSchedulerItem;
+
   PGRef pg;                      ///< pg reference
   std::deque<OpSchedulerItem> to_process; ///< order items for this slot
   int num_running = 0;          ///< _process threads doing pg lookup/lock
@@ -974,7 +981,7 @@ struct OSDShardPGSlot {
 
   /// waiting for a merge (source or target) by this epoch
   epoch_t waiting_for_merge_epoch = 0;
-};
+}; // zhou: struct OSDShardPGSlot
 
 // zhou: README,
 struct OSDShard {
@@ -1064,7 +1071,9 @@ struct OSDShard {
 }; // zhou: struct OSDShard {}
 
 
-// zhou: README,
+// zhou: README, class OSD used for communicate with OSDC and handle it in os/object store.
+//       Created in ceph_osd.c
+//       Derived from class Dispatcher, stands for capability to handle messages.
 class OSD : public Dispatcher,
 	    public md_config_obs_t {
   using OpSchedulerItem = ceph::osd::scheduler::OpSchedulerItem;
@@ -1099,6 +1108,7 @@ protected:
   MgrClient   mgrc;
   PerfCounters      *logger;
   PerfCounters      *recoverystate_perf;
+  // zhou:
   ObjectStore *store;
 #ifdef HAVE_LIBFUSE
   FuseStore *fuse_store = nullptr;
@@ -1123,6 +1133,7 @@ protected:
   void create_recoverystate_perf();
   void tick();
   void tick_without_osd_lock();
+
   void _dispatch(Message *m);
   void dispatch_op(OpRequestRef op);
 
@@ -1438,7 +1449,7 @@ private:
 	con_front.reset(nullptr);
       }
     }
-  };
+  }; // zhou: struct HeartbeatInfo {}
 
   ceph::mutex heartbeat_lock = ceph::make_mutex("OSD::heartbeat_lock");
   std::map<int, int> debug_heartbeat_drops_remaining;
@@ -1495,6 +1506,8 @@ private:
 public:
   bool heartbeat_dispatch(Message *m);
 
+
+  // zhou: "heartbeat_dispatcher"
   struct HeartbeatDispatcher : public Dispatcher {
     OSD *osd;
     explicit HeartbeatDispatcher(OSD *o) : Dispatcher(o->cct), osd(o) {}
@@ -1509,12 +1522,15 @@ public:
 	return false;
       }
     }
+
     void ms_fast_dispatch(Message *m) override {
       osd->heartbeat_dispatch(m);
     }
+    // zhou: struct HeartbeatDispatcher {} member function
     bool ms_dispatch(Message *m) override {
       return osd->heartbeat_dispatch(m);
     }
+
     bool ms_handle_reset(Connection *con) override {
       return osd->heartbeat_reset(con);
     }
@@ -1525,7 +1541,7 @@ public:
     int ms_handle_authentication(Connection *con) override {
       return true;
     }
-  } heartbeat_dispatcher;
+  } heartbeat_dispatcher; // zhou: struct HeartbeatDispatcher {}
 
 private:
   // -- waiters --
@@ -1572,6 +1588,7 @@ protected:
   friend class ceph::osd::scheduler::PGRecovery;
   friend class ceph::osd::scheduler::PGDelete;
 
+  // zhou:
   class ShardedOpWQ
     : public ShardedThreadPool::ShardedWQ<OpSchedulerItem>
   {
@@ -1651,7 +1668,7 @@ protected:
 	p->complete(0);
       }
     }
-  } op_shardedwq;
+  } op_shardedwq; // zhou: README,
 
 
   void enqueue_op(spg_t pg, OpRequestRef&& op, epoch_t epoch);
@@ -1930,8 +1947,8 @@ protected:
 
 
 private:
+  // zhou: define fast dispatch to upper commponents capability.
   bool ms_can_fast_dispatch_any() const override { return true; }
-  // zhou:
   bool ms_can_fast_dispatch(const Message *m) const override {
     switch (m->get_type()) {
     case CEPH_MSG_PING:
@@ -1978,8 +1995,11 @@ private:
       return false;
     }
   }
+  // zhou: handler registerec to handle fast message type defined above.
   void ms_fast_dispatch(Message *m) override;
+  // zhou: handler registered to handle other message type.
   bool ms_dispatch(Message *m) override;
+
   void ms_handle_connect(Connection *con) override;
   void ms_handle_fast_connect(Connection *con) override;
   void ms_handle_fast_accept(Connection *con) override;

@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -24,6 +24,7 @@
 
 #include "Stack.h"
 
+// zhou:
 class PosixWorker : public Worker {
   ceph::NetHandler net;
   void initialize() override;
@@ -37,12 +38,14 @@ class PosixWorker : public Worker {
   int connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *socket) override;
 };
 
+// zhou: README,
 class PosixNetworkStack : public NetworkStack {
   std::vector<std::thread> threads;
 
  public:
   explicit PosixNetworkStack(CephContext *c, const std::string &t);
 
+  // zhou:
   void spawn_worker(unsigned i, std::function<void ()> &&func) override {
     threads.resize(i+1);
     threads[i] = std::thread(func);
@@ -51,6 +54,6 @@ class PosixNetworkStack : public NetworkStack {
     ceph_assert(threads.size() > i && threads[i].joinable());
     threads[i].join();
   }
-};
+}; // zhou: class PosixNetworkStack
 
 #endif //CEPH_MSG_ASYNC_POSIXSTACK_H

@@ -47,6 +47,7 @@ struct Index {
  * by it, no other concurrent accesses may be allowed.
  * This is enforced by using CollectionIndex::access_lock
  */
+// zhou: README,
 class IndexManager {
   CephContext* cct;
   /// Lock for Index Manager
@@ -94,6 +95,6 @@ public:
    * @return error code
    */
   int init_index(coll_t c, const char *path, uint32_t filestore_version);
-};
+}; // zhou: class IndexManager
 
 #endif

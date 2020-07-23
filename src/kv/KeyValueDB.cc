@@ -13,6 +13,7 @@
 using std::map;
 using std::string;
 
+// zhou: factory
 KeyValueDB *KeyValueDB::create(CephContext *cct, const string& type,
 			       const string& dir,
 			       map<string,string> options,
@@ -29,7 +30,7 @@ KeyValueDB *KeyValueDB::create(CephContext *cct, const string& type,
   }
 #endif
 
-  if ((type == "memdb") && 
+  if ((type == "memdb") &&
     cct->check_experimental_feature_enabled("memdb")) {
     return new MemDB(cct, dir, p);
   }

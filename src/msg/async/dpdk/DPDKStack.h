@@ -246,6 +246,7 @@ class DPDKWorker : public Worker {
   friend class DPDKServerSocketImpl<tcp4>;
 };
 
+// zhou: README,
 class DPDKStack : public NetworkStack {
   vector<std::function<void()> > funcs;
  public:

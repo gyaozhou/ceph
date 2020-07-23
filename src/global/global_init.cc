@@ -170,6 +170,10 @@ void global_pre_init(
   g_conf().complain_about_parse_error(g_ceph_context);
 }
 
+// zhou: README,
+//      "global_init is the first initialization function that
+//       daemons and utility programs need to call. It takes care of a lot of
+//       initialization, including setting up g_ceph_context."
 boost::intrusive_ptr<CephContext>
 global_init(const std::map<std::string,std::string> *defaults,
 	    std::vector < const char* >& args,
@@ -209,7 +213,7 @@ global_init(const std::map<std::string,std::string> *defaults,
 
   // drop privileges?
   std::ostringstream priv_ss;
- 
+
   // consider --setuser root a no-op, even if we're not root
   if (getuid() != 0) {
     if (g_conf()->setuser.length()) {
@@ -458,7 +462,7 @@ void global_init_daemonize(CephContext *cct)
 	 << cpp_strerror(ret) << dendl;
     exit(1);
   }
- 
+
   global_init_postfork_start(cct);
   global_init_postfork_finish(cct);
 #else
@@ -574,7 +578,7 @@ int global_init_preload_erasure_code(const CephContext *cct)
 	string plugin_name = *i;
 	string replacement = "";
 
-	if (plugin_name == "jerasure_generic" || 
+	if (plugin_name == "jerasure_generic" ||
 	    plugin_name == "jerasure_sse3" ||
 	    plugin_name == "jerasure_sse4" ||
 	    plugin_name == "jerasure_neon") {

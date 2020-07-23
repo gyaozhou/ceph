@@ -68,6 +68,8 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
     * called under the same locks.
     */
    // zhou: callbacks used to register all kinds of object store implementations.
+   //       The client of PGBackend, should implemented such interface to handle
+   //       following operations of PGBackend.
    class Listener {
    public:
      /// Debugging
@@ -311,7 +313,11 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
      virtual ~Listener() {}
    }; // zhou: class Listener
 
+   // zhou: refer to PrimaryLogPG Listener related API.
+   //       PGBackend(and its derived class) doesn't own ObjectStore(and its derived class).
+   //       PrimaryLogPG's Listener API is a interface for PGBackend invoke ObjectStore API.
    Listener *parent;
+
    Listener *get_parent() const { return parent; }
    PGBackend(CephContext* cct, Listener *l, ObjectStore *store, const coll_t &coll,
 	     ObjectStore::CollectionHandle &ch) :
@@ -447,6 +453,7 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
 
    virtual ~PGBackend() {}
 
+   // zhou:
    /// execute implementation specific transaction
    virtual void submit_transaction(
      const hobject_t &hoid,               ///< [in] object

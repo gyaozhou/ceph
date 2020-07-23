@@ -19,7 +19,9 @@
 
 class SloppyCRCMap;
 
+// zhou: class XfsFileStoreBackend and other file system will derive from this class.
 class GenericFileStoreBackend : public FileStoreBackend {
+
 private:
   bool ioctl_fiemap;
   bool seek_data_hole;

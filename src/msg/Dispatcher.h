@@ -70,6 +70,7 @@ public:
    * @returns True if the Dispatcher can handle any messages via
    * fast dispatch; false otherwise.
    */
+  // zhou:
   virtual bool ms_can_fast_dispatch_any() const { return false; }
   /**
    * Perform a "fast dispatch" on a given message. See

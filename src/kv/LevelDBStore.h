@@ -53,6 +53,7 @@ class CephLevelDBLogger;
 /**
  * Uses LevelDB to implement the KeyValueDB interface
  */
+// zhou:
 class LevelDBStore : public KeyValueDB {
   CephContext *cct;
   PerfCounters *logger;
@@ -225,8 +226,8 @@ public:
     std::map<std::string, ceph::buffer::list> *out
     ) override;
 
-  int get(const std::string &prefix, 
-	  const std::string &key,   
+  int get(const std::string &prefix,
+	  const std::string &key,
 	  ceph::buffer::list *value) override;
 
   using KeyValueDB::get;
@@ -407,6 +408,6 @@ err:
 	db->NewIterator(leveldb::ReadOptions()));
   }
 
-};
+}; // zhou:class LevelDBStore
 
 #endif

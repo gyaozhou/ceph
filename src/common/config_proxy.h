@@ -12,6 +12,7 @@
 // the legacy settings with arrow operator, and the new-style config with its
 // member methods.
 namespace ceph::common{
+// zhou: README,
 class ConfigProxy {
   static ConfigValues get_config_values(const ConfigProxy &config_proxy) {
     std::lock_guard locker(config_proxy.lock);
@@ -204,6 +205,8 @@ public:
 
     call_observers(locker, rev_obs);
   }
+
+  // zhou: README,
   void add_observer(md_config_obs_t* obs) {
     std::lock_guard l(lock);
     obs_mgr.add_observer(obs);
@@ -341,6 +344,6 @@ public:
     std::lock_guard l{lock};
     config.get_defaults_bl(values, bl);
   }
-};
+}; // zhou: class ConfigProxy
 
 }

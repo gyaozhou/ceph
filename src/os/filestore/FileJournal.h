@@ -46,6 +46,7 @@ class FileJournal :
   public Journal,
   public md_config_obs_t {
 public:
+
   /// Protected by finisher_lock
   struct completion_item {
     uint64_t seq;
@@ -56,6 +57,8 @@ public:
       : seq(o), finish(c), start(s), tracked_op(opref) {}
     completion_item() : seq(0), finish(0), start(0) {}
   };
+
+  // zhou: encapsule a entry need to submit
   struct write_item {
     uint64_t seq;
     ceph::buffer::list bl;
@@ -71,6 +74,8 @@ public:
 
   ceph::mutex finisher_lock = ceph::make_mutex("FileJournal::finisher_lock");
   ceph::condition_variable finisher_cond;
+
+  // zhou: latest already submit entry sequence.
   uint64_t journaled_seq;
   bool plug_journal_completions;
 
@@ -85,7 +90,9 @@ public:
 
   ceph::mutex completions_lock =
     ceph::make_mutex("FileJournal::completions_lock");
+  // zhou:
   std::list<completion_item> completions;
+
   bool completions_empty() {
     std::lock_guard l{completions_lock};
     return completions.empty();
@@ -282,6 +289,7 @@ private:
   /// End protected by aio_lock
 #endif
 
+  // zhou:
   uint64_t last_committed_seq;
   uint64_t journaled_since_start;
 
@@ -305,6 +313,7 @@ private:
 
   // in journal
   std::deque<std::pair<uint64_t, off64_t> > journalq;  // track seq offsets, so we can trim later.
+  // zhou: latest entry has not submitted completed.
   uint64_t writing_seq;
 
 
@@ -373,6 +382,7 @@ private:
 
   void do_discard(int64_t offset, int64_t end);
 
+  // zhou: journal write thread
   class Writer : public Thread {
     FileJournal *journal;
   public:
@@ -383,6 +393,7 @@ private:
     }
   } write_thread;
 
+  // zhou: write completion thread
   class WriteFinisher : public Thread {
     FileJournal *journal;
   public:

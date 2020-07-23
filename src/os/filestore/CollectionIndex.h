@@ -25,6 +25,9 @@
 /**
   CollectionIndex provides an interface for manipulating indexed collections
  */
+// zhou: README, HashIndex -> LFNIndex -> CollectionIndex.
+//       Abstract class to provide Subdirectories capability to avoid too much
+//       files in a directory.
 class CollectionIndex {
 public:
   CephContext* cct;

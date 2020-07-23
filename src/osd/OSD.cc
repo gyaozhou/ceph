@@ -1070,6 +1070,7 @@ void OSDService::send_message_osd_cluster(int peer, Message *m, epoch_t from_epo
   release_map(next_map);
 }
 
+// zhou: send message to other OSD
 void OSDService::send_message_osd_cluster(std::vector<std::pair<int, Message*>>& messages, epoch_t from_epoch)
 {
   OSDMapRef next_map = get_nextmap_reserved();
@@ -1090,6 +1091,7 @@ void OSDService::send_message_osd_cluster(std::vector<std::pair<int, Message*>>&
 	  next_map->get_cluster_addrs(iter.first), false, true);
     }
     maybe_share_map(peer_con.get(), next_map);
+    // zhou:
     peer_con->send_message(iter.second);
   }
   release_map(next_map);
@@ -1706,6 +1708,7 @@ void OSDService::handle_misdirected_op(PG *pg, OpRequestRef op)
 	       << " in e" << m->get_map_epoch() << "/" << osdmap->get_epoch();
 }
 
+// zhou: op queues.
 void OSDService::enqueue_back(OpSchedulerItem&& qi)
 {
   osd->op_shardedwq.queue(std::move(qi));
@@ -1946,6 +1949,7 @@ int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f, std::ostream& o
 
 }} // namespace ceph::osd_cmds
 
+// zhou: README, looks like create new object store
 int OSD::mkfs(CephContext *cct, ObjectStore *store, uuid_d fsid, int whoami, string osdspec_affinity)
 {
   int ret;
@@ -1957,6 +1961,7 @@ int OSD::mkfs(CephContext *cct, ObjectStore *store, uuid_d fsid, int whoami, str
   // if we are fed a uuid for this osd, use it.
   store->set_fsid(cct->_conf->osd_uuid);
 
+  // zhou:
   ret = store->mkfs();
   if (ret) {
     derr << "OSD::mkfs: ObjectStore::mkfs failed with error "
@@ -1966,6 +1971,7 @@ int OSD::mkfs(CephContext *cct, ObjectStore *store, uuid_d fsid, int whoami, str
 
   store->set_cache_shards(1);  // doesn't matter for mkfs!
 
+  // zhou:
   ret = store->mount();
   if (ret) {
     derr << "OSD::mkfs: couldn't mount ObjectStore: error "
@@ -1974,6 +1980,7 @@ int OSD::mkfs(CephContext *cct, ObjectStore *store, uuid_d fsid, int whoami, str
   }
 
   ch = store->open_collection(coll_t::meta());
+
   if (ch) {
     ret = store->read(ch, OSD_SUPERBLOCK_GOBJECT, 0, 0, sbbl);
     if (ret < 0) {
@@ -2090,6 +2097,7 @@ int OSD::write_meta(CephContext *cct, ObjectStore *store, uuid_d& cluster_fsid, 
   return 0;
 }
 
+// zhou: README,
 int OSD::peek_meta(ObjectStore *store,
 		   std::string *magic,
 		   uuid_d *cluster_fsid,
@@ -2139,6 +2147,7 @@ int OSD::peek_meta(ObjectStore *store,
 
 // cons/des
 
+// zhou: README,
 OSD::OSD(CephContext *cct_, ObjectStore *store_,
 	 int id,
 	 Messenger *internal_messenger,
@@ -2269,6 +2278,7 @@ void OSD::handle_signal(int signum)
   shutdown();
 }
 
+// zhou:
 int OSD::pre_init()
 {
   std::lock_guard lock(osd_lock);
@@ -2823,6 +2833,7 @@ will start to track new ops received afterwards.";
 	hobject_t soid(sobject_t(oid, 0));
 	ObjectStore::Transaction t;
 	t.write(coll_t(), ghobject_t(soid), 0, osize, bl);
+	// zhou:
 	store->queue_transaction(service.meta_ch, std::move(t), NULL);
 	cleanupt.remove(coll_t(), ghobject_t(soid));
       }
@@ -3288,6 +3299,7 @@ float OSD::get_osd_snap_trim_sleep()
   return cct->_conf.get_val<double>("osd_snap_trim_sleep_hdd");
 }
 
+// zhou: README,
 int OSD::init()
 {
   OSDMapRef osdmap;
@@ -3558,9 +3570,12 @@ int OSD::init()
   monc->set_log_client(&log_client);
   update_log_config();
 
+  // zhou: register dispatcher to class Messenger, then class OSD could handle
+  //       received messages via this->ms_dispatch()/ms_fast_dispatch().
   // i'm ready!
   client_messenger->add_dispatcher_tail(&mgrc);
   client_messenger->add_dispatcher_tail(this);
+
   cluster_messenger->add_dispatcher_head(this);
 
   hb_front_client_messenger->add_dispatcher_head(&heartbeat_dispatcher);
@@ -3691,6 +3706,7 @@ out:
   return r;
 }
 
+// zhou: README,
 void OSD::final_init()
 {
   AdminSocket *admin_socket = cct->get_admin_socket();
@@ -4814,8 +4830,10 @@ PGRef OSD::handle_pg_create_info(const OSDMapRef& osdmap,
 		 << "the pool allows ec overwrites but is not stored in "
 		 << "bluestore, so deep scrubbing will not detect bitrot";
   }
+  // zhou: encapsule OP in transaction!!!
   create_pg_collection(
     rctx.transaction, pgid, pgid.get_split_bits(pp->get_pg_num()));
+
   init_pg_ondisk(rctx.transaction, pgid, pp);
 
   int role = startmap->calc_pg_role(pg_shard_t(whoami, pgid.shard), acting);
@@ -5244,6 +5262,7 @@ void OSD::reset_heartbeat_peers(bool all)
   }
 }
 
+// zhou: README,
 void OSD::handle_osd_ping(MOSDPing *m)
 {
   if (superblock.cluster_fsid != m->fsid) {
@@ -6900,6 +6919,7 @@ void OSD::probe_smart(const string& only_devid, ostream& ss)
   json_spirit::write(json_map, ss, json_spirit::pretty_print);
 }
 
+// zhou:
 bool OSD::heartbeat_dispatch(Message *m)
 {
   dout(30) << "heartbeat_dispatch " << m << dendl;
@@ -6922,6 +6942,7 @@ bool OSD::heartbeat_dispatch(Message *m)
   return true;
 }
 
+// zhou: README, non-fast message type handler
 bool OSD::ms_dispatch(Message *m)
 {
   dout(20) << "OSD::ms_dispatch: " << *m << dendl;
@@ -6940,7 +6961,10 @@ bool OSD::ms_dispatch(Message *m)
     return true;
   }
 
+  // zhou:
   do_waiters();
+
+  // zhou:
   _dispatch(m);
 
   osd_lock.unlock();
@@ -7029,7 +7053,7 @@ void OSD::dispatch_session_waiting(const ceph::ref_t<Session>& session, OSDMapRe
   }
 }
 
-// zhou: README, OSD message hander
+// zhou: README, OSD fast message type handler
 void OSD::ms_fast_dispatch(Message *m)
 {
   FUNCTRACE(cct);
@@ -7194,16 +7218,19 @@ void OSD::do_waiters()
   dout(10) << "do_waiters -- finish" << dendl;
 }
 
+// zhou: handle
 void OSD::dispatch_op(OpRequestRef op)
 {
   switch (op->get_req()->get_type()) {
 
+    // zhou: create PG
   case MSG_OSD_PG_CREATE:
     handle_pg_create(op);
     break;
   }
 }
 
+// zhou: README,
 void OSD::_dispatch(Message *m)
 {
   ceph_assert(ceph_mutex_is_locked(osd_lock));
@@ -7245,6 +7272,7 @@ void OSD::_dispatch(Message *m)
         break;
       }
 
+      // zhou:
       // need OSDMap
       dispatch_op(op);
     }
@@ -9668,7 +9696,7 @@ void OSD::enqueue_peering_evt(spg_t pgid, PGPeeringEventRef evt)
 /*
  * NOTE: dequeue called in worker thread, with pg lock
  */
-// zhou: OSD map update
+// zhou: README, dequeue OP from queue.
 void OSD::dequeue_op(
   PGRef pg, OpRequestRef op,
   ThreadPool::TPHandle &handle)
@@ -9700,7 +9728,7 @@ void OSD::dequeue_op(
   op->mark_reached_pg();
   op->osd_trace.event("dequeue_op");
 
-  // zhou: README, PrimaryLogPG::do_request()
+  // zhou: README, PrimaryLogPG::do_request(), handle OP.
   pg->do_request(op, handle);
 
   // finish

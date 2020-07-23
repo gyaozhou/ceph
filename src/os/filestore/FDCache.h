@@ -27,6 +27,8 @@
 /**
  * FD Cache
  */
+// zhou: due to FileStore use a lot of files to store objects, it's need to
+//       accelerate the lookup of the fd.
 class FDCache : public md_config_obs_t {
 public:
   /**
@@ -46,24 +48,28 @@ public:
     ~FD() {
       VOID_TEMP_FAILURE_RETRY(::close(fd));
     }
-  };
+  }; // zhou: class FD
 
 private:
   CephContext *cct;
   const int registry_shards;
+  // zhou: array of "SharedLRU<ghobject_t, FD>"
   SharedLRU<ghobject_t, FD> *registry;
 
 public:
   explicit FDCache(CephContext *cct) : cct(cct),
-  registry_shards(std::max<int64_t>(cct->_conf->filestore_fd_cache_shards, 1)) {
+				       registry_shards(std::max<int64_t>(cct->_conf->filestore_fd_cache_shards, 1)) {
+
     ceph_assert(cct);
     cct->_conf.add_observer(this);
+
     registry = new SharedLRU<ghobject_t, FD>[registry_shards];
     for (int i = 0; i < registry_shards; ++i) {
       registry[i].set_cct(cct);
       registry[i].set_size(
           std::max<int64_t>((cct->_conf->filestore_fd_cache_size / registry_shards), 1));
     }
+
   }
   ~FDCache() override {
     cct->_conf.remove_observer(this);
@@ -95,6 +101,7 @@ public:
     };
     return KEYS;
   }
+  // zhou: handler for config changes
   void handle_conf_change(const ConfigProxy& conf,
 			  const std::set<std::string> &changed) override {
     if (changed.count("filestore_fd_cache_size")) {
@@ -104,7 +111,7 @@ public:
     }
   }
 
-};
+}; // zhou: class FDCache
 typedef FDCache::FDRef FDRef;
 
 #endif

@@ -34,7 +34,7 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "stack "
 
-// zhou: README,
+// zhou: README, main loop for worker thread to handle messagers.
 std::function<void ()> NetworkStack::add_thread(unsigned worker_id)
 {
   Worker *w = workers[worker_id];
@@ -42,7 +42,9 @@ std::function<void ()> NetworkStack::add_thread(unsigned worker_id)
       char tp_name[16];
       sprintf(tp_name, "msgr-worker-%u", w->id);
       ceph_pthread_setname(pthread_self(), tp_name);
+
       const unsigned EventMaxWaitUs = 30000000;
+      // zhou:
       w->center.set_owner();
       ldout(cct, 10) << __func__ << " starting" << dendl;
       w->initialize();
@@ -64,6 +66,7 @@ std::function<void ()> NetworkStack::add_thread(unsigned worker_id)
   };
 }
 
+// zhou: README,
 std::shared_ptr<NetworkStack> NetworkStack::create(CephContext *c,
 						   const std::string &t)
 {
@@ -108,6 +111,7 @@ NetworkStack::NetworkStack(CephContext *c, const std:: string &t): type(t), star
   ceph_assert(cct->_conf->ms_async_op_threads > 0);
 
   const int InitEventNumber = 5000;
+  // zhou: default is 3
   num_workers = cct->_conf->ms_async_op_threads;
   if (num_workers >= EventCenter::MAX_EVENTCENTER) {
     ldout(cct, 0) << __func__ << " max thread limit is "
@@ -119,11 +123,13 @@ NetworkStack::NetworkStack(CephContext *c, const std:: string &t): type(t), star
 
   for (unsigned worker_id = 0; worker_id < num_workers; ++worker_id) {
     Worker *w = create_worker(cct, type, worker_id);
+    // zhou:
     w->center.init(InitEventNumber, worker_id, type);
     workers.push_back(w);
   }
 }
 
+// zhou: README, create threads
 void NetworkStack::start()
 {
   std::unique_lock<decltype(pool_spin)> lk(pool_spin);
@@ -135,6 +141,7 @@ void NetworkStack::start()
   for (unsigned i = 0; i < num_workers; ++i) {
     if (workers[i]->is_init())
       continue;
+    // zhou: get a anonymous function
     std::function<void ()> thread = add_thread(i);
     spawn_worker(i, std::move(thread));
   }
@@ -145,6 +152,7 @@ void NetworkStack::start()
     workers[i]->wait_for_init();
 }
 
+// zhou: README, find a thread with lower load.
 Worker* NetworkStack::get_worker()
 {
   ldout(cct, 30) << __func__ << dendl;

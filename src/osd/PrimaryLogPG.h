@@ -333,6 +333,8 @@ public:
   void send_message(int to_osd, Message *m) override {
     osd->send_message_osd_cluster(to_osd, m, get_osdmap_epoch());
   }
+
+  // zhou:
   void queue_transaction(ObjectStore::Transaction&& t,
 			 OpRequestRef op) override {
     osd->store->queue_transaction(ch, std::move(t), op);

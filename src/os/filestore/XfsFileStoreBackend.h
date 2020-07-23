@@ -23,9 +23,11 @@ class XfsFileStoreBackend : public GenericFileStoreBackend {
 private:
   bool m_has_extsize;
   int set_extsize(int fd, unsigned int val);
+
 public:
   explicit XfsFileStoreBackend(FileStore *fs);
   ~XfsFileStoreBackend() override {}
+
   const char *get_name() override {
     return "xfs";
   }

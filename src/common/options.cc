@@ -1134,6 +1134,7 @@ std::vector<Option> get_global_options() {
     .set_default(1)
     .set_description("Log level at which to hexdump corrupt messages we receive"),
 
+    // zhou: threads number for communication
     Option("ms_async_op_threads", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(3)
     .set_min_max(1, 24)
@@ -2498,11 +2499,13 @@ std::vector<Option> get_global_options() {
     .set_flag(Option::FLAG_CREATE)
     .set_description("uuid label for a new OSD"),
 
+    // zhou:
     Option("osd_data", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("/var/lib/ceph/osd/$cluster-$id")
     .set_flag(Option::FLAG_NO_MON_UPDATE)
     .set_description("path to OSD data"),
 
+    // zhou: used by filestore only, to store journal
     Option("osd_journal", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("/var/lib/ceph/osd/$cluster-$id/journal")
     .set_flag(Option::FLAG_NO_MON_UPDATE)
@@ -2517,6 +2520,7 @@ std::vector<Option> get_global_options() {
     .set_default(true)
     .set_description("flush FileStore journal contents during clean OSD shutdown"),
 
+    // zhou:
     Option("osd_os_flags", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description("flags to skip filestore omap or journal initialization"),
@@ -3820,6 +3824,7 @@ std::vector<Option> get_global_options() {
     .set_description("Max size of the per-op payload for requests with the RETURNVEC flag set")
     .set_long_description("This value caps the amount of data (per op; a request may have many ops) that will be sent back to the client and recorded in the PG log."),
 
+    // zhou: specify object store type
     Option("osd_objectstore", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("bluestore")
     .set_enum_allowed({"bluestore", "filestore", "memstore", "kstore"})
@@ -4771,6 +4776,7 @@ std::vector<Option> get_global_options() {
     .set_default("max_background_jobs=10,compaction_readahead_size=2097152,compression=kNoCompression")
     .set_description("Options to pass through when RocksDB is used as the KeyValueDB for filestore."),
 
+    // zhou: which backend used for "omap"
     Option("filestore_omap_backend", Option::TYPE_STR, Option::LEVEL_DEV)
     .set_default("rocksdb")
     .set_enum_allowed({"leveldb", "rocksdb"})
@@ -5076,6 +5082,7 @@ std::vector<Option> get_global_options() {
     .set_default(128)
     .set_description(""),
 
+    // zhou:
     Option("filestore_fd_cache_shards", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(16)
     .set_description(""),
@@ -5136,6 +5143,8 @@ std::vector<Option> get_global_options() {
     .set_default(10_M)
     .set_description("Max bytes in flight to journal"),
 
+    // zhou: package several entries into on bufferlist, write to journal used by
+    //       filestore.
     Option("journal_max_write_entries", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(100)
     .set_description("Max IOs in flight to journal"),

@@ -17,12 +17,14 @@
 
 namespace ceph::osd::scheduler {
 
+// zhou: README,
 void PGOpItem::run(
   OSD *osd,
   OSDShard *sdata,
   PGRef& pg,
   ThreadPool::TPHandle &handle)
 {
+  // zhou: OSD::dequeue_op()
   osd->dequeue_op(pg, op, handle);
   pg->unlock();
 }

@@ -233,9 +233,14 @@ public:
 private:
   TransactionData data;
 
+  // zhou:
   std::map<coll_t, uint32_t> coll_index;
+  // zhou:
   std::map<ghobject_t, uint32_t> object_index;
 
+  // zhou: The max allocated coll id and object id.
+  //       These id are used in a Transaction only, used when multiply OPs share same
+  //       collection or object.
   uint32_t coll_id = 0;
   uint32_t object_id = 0;
 
@@ -1001,6 +1006,7 @@ public:
     data.ops = data.ops + 1;
   }
 
+  // zhou:
   /// Create the collection
   void create_collection(const coll_t& cid, int bits) {
     Op* _op = _get_next_op();
@@ -1289,7 +1295,8 @@ public:
 
   void dump(ceph::Formatter *f);
   static void generate_test_instances(std::list<Transaction*>& o);
-};
+}; // zhou: class Transaction
+
 WRITE_CLASS_ENCODER(Transaction)
 WRITE_CLASS_ENCODER(Transaction::TransactionData)
 
